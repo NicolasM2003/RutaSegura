@@ -9,7 +9,7 @@ const obtenerDatosZona = async (comuna) => {
       fecha,
       rango_horario,
       grupo_delito_id,
-      comunas (
+      comunas!inner (
         id,
         nombre
       )
