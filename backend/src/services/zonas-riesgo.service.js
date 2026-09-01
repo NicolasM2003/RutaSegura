@@ -1,7 +1,7 @@
 const supabase = require("../config/supabase");
 const { calcularRiesgo } = require("./riesgo.service");
 
-const TAMANO_CELDA = 0.002;
+const TAMANO_CELDA = 0.004;
 
 const obtenerDelitosGeograficos = async (comuna) => {
   let comunaId = null;

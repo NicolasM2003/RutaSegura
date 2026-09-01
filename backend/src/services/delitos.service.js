@@ -32,8 +32,7 @@ const obtenerDelitos = async () => {
         nombre
       )
     `)
-    .order("fecha", { ascending: false })
-    .limit(10);
+    .order("fecha", { ascending: false });
 
   if (error) {
     throw error;
