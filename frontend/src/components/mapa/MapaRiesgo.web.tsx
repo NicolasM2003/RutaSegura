@@ -44,65 +44,104 @@ export default function MapaRiesgo() {
    * Obtener zonas y delitos desde el backend.
    */
   useEffect(() => {
-    const cargarDatos = async () => {
-      try {
-        const [
-          respuestaZonas,
-          respuestaDelitos,
-        ] = await Promise.all([
-          fetch(
-            "http://localhost:3000/api/geografia?comuna=Vi%C3%B1a%20del%20Mar"
-          ),
-          fetch(
-            "http://localhost:3000/api/delitos"
-          ),
-        ]);
+  const cargarDatos = async () => {
+    try {
+      const comunas = [
+        "Viña del Mar",
+        "Concón",
+        "Valparaíso",
+      ];
 
-        if (!respuestaZonas.ok) {
+      const respuestasZonas = await Promise.all(
+        comunas.map((comuna) =>
+          fetch(
+            `http://localhost:3000/api/geografia?comuna=${encodeURIComponent(
+              comuna
+            )}`
+          )
+        )
+      );
+
+      const respuestaDelitos = await fetch(
+        "http://localhost:3000/api/delitos"
+      );
+
+      // Verificar zonas
+      for (const respuesta of respuestasZonas) {
+        if (!respuesta.ok) {
           throw new Error(
-            `Error zonas HTTP: ${respuestaZonas.status}`
+            `Error zonas HTTP: ${respuesta.status}`
           );
         }
+      }
 
-        if (!respuestaDelitos.ok) {
-          throw new Error(
-            `Error delitos HTTP: ${respuestaDelitos.status}`
-          );
-        }
-
-        const resultadoZonas =
-          await respuestaZonas.json();
-
-        const resultadoDelitos =
-          await respuestaDelitos.json();
-
-        console.log(
-          "Total zonas:",
-          resultadoZonas.total
-        );
-
-        console.log(
-          "Total delitos:",
-          resultadoDelitos.total
-        );
-
-        setZonas(
-          resultadoZonas.data || []
-        );
-
-        setDelitos(
-          resultadoDelitos.data || []
-        );
-      } catch (error) {
-        console.error(
-          "Error obteniendo datos:",
-          error
+      if (!respuestaDelitos.ok) {
+        throw new Error(
+          `Error delitos HTTP: ${respuestaDelitos.status}`
         );
       }
-    };
 
-    cargarDatos();
-  }, []);
+      const resultadosZonas =
+        await Promise.all(
+          respuestasZonas.map((respuesta) =>
+            respuesta.json()
+          )
+        );
+
+      const resultadoDelitos =
+        await respuestaDelitos.json();
+
+      // Unir las zonas de las 3 comunas
+      const zonasTodas = resultadosZonas.flatMap(
+  (resultado, index) => {
+    const comuna = comunas[index];
+
+    return (resultado.data || []).map(
+      (zona: any) => ({
+        ...zona,
+        comuna,
+      })
+    );
+  }
+);
+      console.log(
+        "Zonas Viña:",
+        resultadosZonas[0]?.total
+      );
+
+      console.log(
+        "Zonas Concón:",
+        resultadosZonas[1]?.total
+      );
+
+      console.log(
+        "Zonas Valparaíso:",
+        resultadosZonas[2]?.total
+      );
+
+      console.log(
+        "Total zonas:",
+        zonasTodas.length
+      );
+
+      console.log(
+        "Total delitos:",
+        resultadoDelitos.total
+      );
+
+      setZonas(zonasTodas);
+      setDelitos(resultadoDelitos.data || []);
+
+    } catch (error) {
+      console.error(
+        "Error obteniendo datos:",
+        error
+      );
+    }
+  };
+
+  cargarDatos();
+}, []);
 
   if (!mapaComponentes || !leaflet) {
     return null;
@@ -455,10 +494,7 @@ export default function MapaRiesgo() {
 
             return (
               <Circle
-                key={
-                  zona.id_zona ||
-                  index
-                }
+                key={`${zona.comuna}-${zona.id_zona || index}`}
                 center={[
                   latitud,
                   longitud,
