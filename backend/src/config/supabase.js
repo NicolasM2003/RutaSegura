@@ -1,14 +1,17 @@
 const { createClient } = require("@supabase/supabase-js");
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
+if (!supabaseUrl || !supabasePublishableKey) {
   throw new Error(
-    "Faltan SUPABASE_URL o SUPABASE_ANON_KEY en las variables de entorno."
+    "Faltan SUPABASE_URL o SUPABASE_PUBLISHABLE_KEY en las variables de entorno."
   );
 }
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(
+  supabaseUrl,
+  supabasePublishableKey
+);
 
 module.exports = supabase;
