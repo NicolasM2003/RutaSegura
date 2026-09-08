@@ -54,4 +54,40 @@ describe("GET /api/delitos", () => {
     expect(delito).toHaveProperty("longitud");
     expect(delito).toHaveProperty("fuente");
   });
+
+  test("contiene datos de Viña del Mar", async () => {
+    const response = await request(app).get("/api/delitos");
+
+    const registros = response.body.data;
+
+    const existe = registros.some(
+      (delito) => delito.comuna === "Viña del Mar"
+    );
+
+    expect(existe).toBe(true);
+  });
+
+  test("contiene datos de Valparaíso", async () => {
+    const response = await request(app).get("/api/delitos");
+
+    const registros = response.body.data;
+
+    const existe = registros.some(
+      (delito) => delito.comuna === "Valparaíso"
+    );
+
+    expect(existe).toBe(true);
+  });
+
+  test("contiene datos de Concón", async () => {
+    const response = await request(app).get("/api/delitos");
+
+    const registros = response.body.data;
+
+    const existe = registros.some(
+      (delito) => delito.comuna === "Concón"
+    );
+
+    expect(existe).toBe(true);
+  });
 });
