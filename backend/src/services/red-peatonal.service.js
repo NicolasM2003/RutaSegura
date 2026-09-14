@@ -770,18 +770,18 @@ const obtenerBboxDesdeSupabase = async (
   comuna,
   bbox
 ) => {
-  if (
-    !comuna ||
-    !bbox
-  ) {
+  if (!comuna || !bbox) {
     return [];
   }
 
-  const {
-    data,
-    error,
-  } =
-    await supabase
+  const segmentos = [];
+  let offset = 0;
+
+  while (true) {
+    const {
+      data,
+      error,
+    } = await supabase
       .from("red_peatonal")
       .select("*")
       .eq("comuna", comuna)
@@ -803,17 +803,38 @@ const obtenerBboxDesdeSupabase = async (
       )
       .order("id_osm", {
         ascending: true,
-      });
+      })
+      .range(
+        offset,
+        offset + SUPABASE_PAGE_SIZE - 1
+      );
 
-  if (error) {
-    throw new Error(
-      `Error consultando BBOX en Supabase: ${error.message}`
+    if (error) {
+      throw new Error(
+        `Error consultando BBOX en Supabase: ${error.message}`
+      );
+    }
+
+    if (!data || data.length === 0) {
+      break;
+    }
+
+    segmentos.push(...data);
+
+    console.log(
+      `SUPABASE BBOX - ${comuna}: lote ${offset}-${
+        offset + data.length - 1
+      } (${data.length} segmentos)`
     );
+
+    if (data.length < SUPABASE_PAGE_SIZE) {
+      break;
+    }
+
+    offset += SUPABASE_PAGE_SIZE;
   }
 
-  return (
-    data || []
-  ).map(
+  return segmentos.map(
     convertirSegmentoDesdeSupabase
   );
 };
