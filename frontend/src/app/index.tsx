@@ -1,6 +1,9 @@
-import { StyleSheet, View } from "react-native";
-import MapaRiesgo from "../components/mapa/MapaRiesgo";
-import "leaflet/dist/leaflet.css";
+import {
+  StyleSheet,
+  View,
+} from "react-native";
+
+import MapaRiesgo from "../components/mapa/native/MapaRiesgo.native";
 
 export default function HomeScreen() {
   return (
