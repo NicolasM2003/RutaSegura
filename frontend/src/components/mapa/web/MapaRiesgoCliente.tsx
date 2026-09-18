@@ -7,6 +7,7 @@ import {
 import {
   MapContainer,
   TileLayer,
+  CircleMarker,
   useMapEvents,
 } from "react-leaflet";
 
@@ -119,6 +120,61 @@ function EscuchaBbox({
   return null;
 }
 
+export function SeleccionarPuntos({
+  origen,
+  destino,
+  onSeleccionarOrigen,
+  onSeleccionarDestino,
+}: {
+  origen: {
+    latitud: number;
+    longitud: number;
+  } | null;
+  destino: {
+    latitud: number;
+    longitud: number;
+  } | null;
+  onSeleccionarOrigen: (
+    latitud: number,
+    longitud: number
+  ) => void;
+  onSeleccionarDestino: (
+    latitud: number,
+    longitud: number
+  ) => void;
+}) {
+  useMapEvents({
+    click: (evento) => {
+      const latitud = evento.latlng.lat;
+      const longitud = evento.latlng.lng;
+
+      if (!origen) {
+        onSeleccionarOrigen(latitud, longitud);
+        return;
+      }
+
+      if (!destino) {
+        onSeleccionarDestino(latitud, longitud);
+      }
+    },
+  });
+
+  return null;
+}
+
+function puntosCompletos(
+  origen: {
+    latitud: number;
+    longitud: number;
+  } | null,
+  destino: {
+    latitud: number;
+    longitud: number;
+  } | null
+) {
+  return origen !== null && destino !== null;
+}
+
 export default function MapaRiesgoClient() {
   const [zonas, setZonas] =
     useState<any[]>([]);
@@ -170,6 +226,29 @@ export default function MapaRiesgoClient() {
 
   const [zoom, setZoom] =
     useState(13);
+
+  const [origen, setOrigen] = useState<{
+    latitud: number;
+    longitud: number;
+  } | null>(null);
+
+  const [destino, setDestino] = useState<{
+    latitud: number;
+    longitud: number;
+  } | null>(null);
+
+    const [ruta, setRuta] = useState<any>(null);
+
+    const [cargandoRuta, setCargandoRuta] = useState(false);
+
+    const [errorRuta, setErrorRuta] = useState<string | null>(null);
+
+  const reiniciarPuntos = () => {
+    setOrigen(null);
+    setDestino(null);
+    setRuta(null);
+    setErrorRuta(null);
+  };
 
   /*
    * Carga zonas y delitos una sola vez.
@@ -286,6 +365,87 @@ export default function MapaRiesgoClient() {
       cancelado = true;
     };
   }, [rangoHorario]);
+
+  useEffect(() => {
+    if (!origen || !destino) {
+      return;
+    }
+
+    const consultarRuta = async () => {
+      setCargandoRuta(true);
+      setErrorRuta(null);
+
+      try {
+        const parametros = new URLSearchParams();
+
+        parametros.set(
+          "comuna",
+          comunaRedPeatonal
+        );
+
+        parametros.set(
+          "origen_lat",
+          String(origen.latitud)
+        );
+
+        parametros.set(
+          "origen_lon",
+          String(origen.longitud)
+        );
+
+        parametros.set(
+          "destino_lat",
+          String(destino.latitud)
+        );
+
+        parametros.set(
+          "destino_lon",
+          String(destino.longitud)
+        );
+
+        parametros.set(
+          "rango_horario",
+          rangoHorario
+        );
+
+        const url =
+          `http://localhost:3000/api/rutas?${parametros.toString()}`;
+
+        console.log("Consultando ruta:", url);
+
+        const respuesta = await fetch(url);
+
+        if (!respuesta.ok) {
+          throw new Error(
+            `Error ruta HTTP: ${respuesta.status}`
+          );
+        }
+
+        const resultado = await respuesta.json();
+
+        console.log("Resultado ruta:", resultado);
+
+        setRuta(resultado);
+      } catch (error) {
+         console.error("Error consultando ruta:", error);
+
+        setRuta(null);
+        setErrorRuta("No fue posible calcular la ruta. Inténtelo nuevamente.");
+      }
+      finally {
+        setTimeout(() => {
+          setCargandoRuta(false);
+        }, 1000);
+      }
+    };
+
+    consultarRuta();
+  }, [
+    origen,
+    destino,
+    comunaRedPeatonal,
+    rangoHorario,
+  ]);
 
   /*
    * Carga la red peatonal según el BBOX visible.
@@ -439,6 +599,52 @@ export default function MapaRiesgoClient() {
           }
         />
 
+        <SeleccionarPuntos
+  origen={origen}
+  destino={destino}
+  onSeleccionarOrigen={(latitud, longitud) =>
+    setOrigen({
+      latitud,
+      longitud,
+    })
+  }
+  onSeleccionarDestino={(latitud, longitud) =>
+    setDestino({
+      latitud,
+      longitud,
+    })
+  }
+/>
+
+        {origen && (
+          <CircleMarker
+            center={[
+              origen.latitud,
+              origen.longitud,
+            ]}
+            radius={8}
+            pathOptions={{
+              color: "#2563eb",
+              fillColor: "#2563eb",
+              fillOpacity: 0.9,
+            }}
+          />
+        )}
+        {destino && (
+          <CircleMarker
+            center={[
+              destino.latitud,
+              destino.longitud,
+            ]}
+            radius={8}
+            pathOptions={{
+              color: "#dc2626",
+              fillColor: "#dc2626",
+              fillOpacity: 0.9,
+            }}
+          />
+        )}
+
         <ControlZoom
           setZoom={setZoom}
         />
@@ -495,6 +701,30 @@ export default function MapaRiesgoClient() {
           setRangoHorario
         }
       />
+
+      {origen && destino && (
+        <button
+          type="button"
+          onClick={reiniciarPuntos}
+          style={{
+            position: "absolute",
+            zIndex: 20000,
+            top: 75,
+            left: 15,
+            background: "#ffffff",
+            color: "#111827",
+            border: "none",
+            borderRadius: 8,
+            padding: "10px 14px",
+            fontWeight: "bold",
+            fontSize: 14,
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+          }}
+        >
+          Cambiar puntos
+        </button>
+      )}
 
       <BotonRedPeatonal
         mostrar={
@@ -567,6 +797,49 @@ export default function MapaRiesgoClient() {
       />
 
       <LeyendaMapa />
+
+      {cargandoRuta && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 20000,
+            top: 80,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#111827",
+            color: "#ffffff",
+            padding: "12px 20px",
+            borderRadius: 8,
+            fontWeight: "bold",
+            fontSize: 14,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          }}
+        >
+          Calculando ruta...
+        </div>
+      )}
+
+      {errorRuta && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 20000,
+            top: 135,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#fee2e2",
+            color: "#991b1b",
+            padding: "12px 20px",
+            borderRadius: 8,
+            fontWeight: "bold",
+            fontSize: 14,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            border: "1px solid #fca5a5",
+          }}
+        >
+          {errorRuta}
+        </div>
+      )}
     </div>
   );
 }
