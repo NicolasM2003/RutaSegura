@@ -3,7 +3,7 @@ require("dotenv").config();
 const {
   calcularCostoRiesgo,
   normalizarDistancia,
-} = require("../src/services/costo-ruta.service");
+} = require("../../src/services/costo-ruta.service");
 
 describe("Normalización del puntaje de riesgo", () => {
   test("riesgo 0 debe normalizarse a 0", () => {
@@ -84,7 +84,7 @@ describe("Normalización del componente de distancia", () => {
 const {
   PESO_RIESGO,
   PESO_DISTANCIA,
-} = require("../src/services/costo-ruta.service");
+} = require("../../src/services/costo-ruta.service");
 
 describe("Pesos del costo de navegación", () => {
   test("el peso de riesgo debe ser 0.7", () => {
@@ -104,7 +104,7 @@ describe("Pesos del costo de navegación", () => {
 
 const {
   calcularCostoNavegacion,
-} = require("../src/services/costo-ruta.service");
+} = require("../../src/services/costo-ruta.service");
 
 describe("Cálculo del costo de navegación", () => {
   test("debe calcular el costo considerando 70% riesgo y 30% distancia", () => {

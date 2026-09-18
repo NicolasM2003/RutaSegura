@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const {
   obtenerRedPeatonalConRiesgo,
-} = require("../src/services/riesgo-red.service");
+} = require("../../src/services/riesgo-red.service");
 
 describe("Integración - Riesgo de segmentos peatonales", () => {
   const COMUNA = "Viña del Mar";
@@ -107,7 +107,7 @@ describe("Integración - Riesgo de segmentos peatonales", () => {
   const {
   calcularCostoRiesgo,
   normalizarDistancia,
-} = require("../src/services/costo-ruta.service");
+} = require("../../src/services/costo-ruta.service");
 
 describe("Normalización del puntaje de riesgo", () => {
   test("riesgo 0 debe normalizarse a 0", () => {

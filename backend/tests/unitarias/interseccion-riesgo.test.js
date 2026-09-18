@@ -5,7 +5,7 @@ const {
   calcularLongitudDentroZona,
   calcularRiesgoSegmento,
   obtenerLimitesZona,
-} = require("../src/services/riesgo-red.service");
+} = require("../../src/services/riesgo-red.service");
 
 describe("Intersección segmento - zona de riesgo", () => {
   /*

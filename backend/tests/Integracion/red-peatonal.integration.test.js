@@ -2,11 +2,11 @@ require("dotenv").config();
 
 const {
   obtenerRedPeatonal,
-} = require("../src/services/red-peatonal.service");
+} = require("../../src/services/red-peatonal.service");
 
 const {
   obtenerGrafoPeatonal,
-} = require("../src/services/grafo-peatonal.service");
+} = require("../../src/services/grafo-peatonal.service");
 
 describe("Integración - Red peatonal", () => {
   const COMUNA = "Viña del Mar";

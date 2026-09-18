@@ -1,6 +1,6 @@
 require("dotenv").config();
 
-jest.mock("../src/services/grafo-peatonal.service", () => ({
+jest.mock("../../src/services/grafo-peatonal.service", () => ({
   obtenerGrafoPeatonal: jest.fn(async () => ({
     nodos: [
       {
@@ -49,7 +49,7 @@ jest.mock("../src/services/grafo-peatonal.service", () => ({
   })),
 }));
 
-const { calcularRutaSegura } = require("../src/services/ruta.service");
+const { calcularRutaSegura } = require("../../src/services/ruta.service");
 
 describe("Manejo de rutas sin conectividad", () => {
   test("debe devolver encontrada=false cuando no existe conexión", async () => {

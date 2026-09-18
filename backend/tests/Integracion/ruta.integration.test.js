@@ -1,6 +1,6 @@
 require("dotenv").config();
 
-const { calcularRutaSegura } = require("../src/services/ruta.service");
+const { calcularRutaSegura } = require("../../src/services/ruta.service");
 
 describe("Integración de ruta origen a destino", () => {
   test("debe calcular una ruta válida entre origen y destino", async () => {

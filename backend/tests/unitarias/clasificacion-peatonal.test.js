@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const {
   obtenerCategoriaPeatonal,
-} = require("../src/services/red-peatonal.service");
+} = require("../../src/services/red-peatonal.service");
 
 describe("Clasificación de infraestructura peatonal", () => {
   test("footway debe clasificarse como exclusiva", () => {
