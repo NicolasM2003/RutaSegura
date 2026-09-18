@@ -484,4 +484,5 @@ module.exports = {
   calcularRiesgoSegmento,
   obtenerLimitesZona,
   calcularLongitudDentroZona,
+  proporcionDentroRectangulo,
 };

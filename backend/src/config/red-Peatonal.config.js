@@ -30,7 +30,7 @@ const HIGHWAY_VALIDOS = [
 /*
  * Tipos de vías excluidos explícitamente.
  *
- * No deben formar parte de una ruta peatonal.
+ * Se consideran vías de uso exclusivo para vehículos motorizados.
  */
 const HIGHWAY_EXCLUIDOS = [
   "motorway",

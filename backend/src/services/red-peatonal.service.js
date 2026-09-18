@@ -1808,4 +1808,5 @@ const obtenerRedPeatonal = async ({
 
 module.exports = {
   obtenerRedPeatonal,
+  obtenerCategoriaPeatonal,
 };
