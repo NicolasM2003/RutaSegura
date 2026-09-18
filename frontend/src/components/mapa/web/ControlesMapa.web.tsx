@@ -392,3 +392,89 @@ export function EstadoRedPeatonal({
     </div>
   );
 }
+
+export const RANGOS_HORARIOS = [
+  "00:00 - 03:59",
+  "04:00 - 07:59",
+  "08:00 - 11:59",
+  "12:00 - 15:59",
+  "16:00 - 19:59",
+  "20:00 - 23:59",
+];
+
+export const esRangoHorarioValido = (
+  rangoHorario: string
+): boolean => {
+  return RANGOS_HORARIOS.includes(
+    rangoHorario
+  );
+};
+
+export function SelectorHorario({
+  rangoHorario,
+  onChange,
+}: {
+  rangoHorario: string;
+  onChange: (rangoHorario: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        zIndex: 10000,
+        top: 15,
+        left: 175,
+        background: "rgba(255,255,255,0.96)",
+        padding: "9px 12px",
+        borderRadius: 8,
+        boxShadow:
+          "0 2px 8px rgba(0,0,0,0.25)",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: "bold",
+          marginBottom: 5,
+          color: "#374151",
+        }}
+      >
+        HORARIO
+      </div>
+
+      <select
+        value={rangoHorario}
+        onChange={(event) => {
+        const valor =
+          event.target.value;
+
+        if (
+          !esRangoHorarioValido(valor)
+        ) {
+          return;
+        }
+
+        onChange(valor);
+      }}
+        style={{
+          border: "1px solid #d1d5db",
+          borderRadius: 6,
+          padding: "7px 9px",
+          background: "#ffffff",
+          color: "#111827",
+          fontSize: 13,
+          fontWeight: "bold",
+          cursor: "pointer",
+          outline: "none",
+        }}
+      >
+        {RANGOS_HORARIOS.map((rango) => (
+          <option key={rango} value={rango}>
+            {rango}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}

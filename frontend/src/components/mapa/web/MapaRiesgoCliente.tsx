@@ -18,6 +18,7 @@ import {
   ControlZoom,
   EstadoRedPeatonal,
   SelectorComuna,
+  SelectorHorario,
 } from "./ControlesMapa.web";
 
 import {
@@ -173,6 +174,14 @@ export default function MapaRiesgoClient() {
   /*
    * Carga zonas y delitos una sola vez.
    */
+
+  const [
+  rangoHorario,
+  setRangoHorario,
+] = useState(
+  "20:00 - 23:59"
+);
+
   useEffect(() => {
     let cancelado = false;
 
@@ -192,6 +201,8 @@ export default function MapaRiesgoClient() {
                   fetch(
                     `http://localhost:3000/api/geografia?comuna=${encodeURIComponent(
                       comuna
+                    )}&rango_horario=${encodeURIComponent(
+                      rangoHorario
                     )}`
                   )
               )
@@ -199,7 +210,10 @@ export default function MapaRiesgoClient() {
 
           const respuestaDelitos =
             await fetch(
-              "http://localhost:3000/api/delitos"
+              "http://localhost:3000/api/delitos?rango_horario=" +
+                encodeURIComponent(
+                  rangoHorario
+                )
             );
 
           for (const respuesta of respuestasZonas) {
@@ -271,7 +285,7 @@ export default function MapaRiesgoClient() {
     return () => {
       cancelado = true;
     };
-  }, []);
+  }, [rangoHorario]);
 
   /*
    * Carga la red peatonal según el BBOX visible.
@@ -470,6 +484,15 @@ export default function MapaRiesgoClient() {
         }
         onChange={
           setComunaRedPeatonal
+        }
+      />
+
+      <SelectorHorario
+        rangoHorario={
+          rangoHorario
+        }
+        onChange={
+          setRangoHorario
         }
       />
 
