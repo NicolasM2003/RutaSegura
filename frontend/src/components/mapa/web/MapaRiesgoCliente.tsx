@@ -9,6 +9,8 @@ import {
   TileLayer,
   CircleMarker,
   useMapEvents,
+  Polyline,
+  Tooltip,
 } from "react-leaflet";
 
 import {
@@ -175,6 +177,38 @@ function puntosCompletos(
   return origen !== null && destino !== null;
 }
 
+export function normalizarGeometriaRuta(
+  geometria: unknown
+): [number, number][] {
+  if (!Array.isArray(geometria)) {
+    return [];
+  }
+
+  return geometria
+    .filter(
+      (punto): punto is [unknown, unknown] =>
+        Array.isArray(punto) &&
+        punto.length >= 2
+    )
+    .map((punto) => [
+      Number(punto[0]),
+      Number(punto[1]),
+    ] as [number, number])
+    .filter(
+      ([latitud, longitud]) =>
+        Number.isFinite(latitud) &&
+        Number.isFinite(longitud)
+    );
+}
+
+export function formatearDistancia(metros: number) {
+  if (metros >= 1000) {
+    return `${(metros / 1000).toFixed(2)} km`;
+  }
+
+  return `${metros.toFixed(2)} m`;
+}
+
 export default function MapaRiesgoClient() {
   const [zonas, setZonas] =
     useState<any[]>([]);
@@ -242,6 +276,12 @@ export default function MapaRiesgoClient() {
     const [cargandoRuta, setCargandoRuta] = useState(false);
 
     const [errorRuta, setErrorRuta] = useState<string | null>(null);
+
+    const geometriaRuta = normalizarGeometriaRuta(ruta?.geometria);
+    console.log(
+      "Geometría ruta normalizada:",
+      geometriaRuta
+    );
 
   const reiniciarPuntos = () => {
     setOrigen(null);
@@ -618,31 +658,75 @@ export default function MapaRiesgoClient() {
 
         {origen && (
           <CircleMarker
-            center={[
-              origen.latitud,
-              origen.longitud,
-            ]}
+            center={[origen.latitud, origen.longitud]}
             radius={8}
             pathOptions={{
               color: "#2563eb",
               fillColor: "#2563eb",
               fillOpacity: 0.9,
             }}
-          />
+          >
+            <Tooltip direction="top" offset={[0, -8]}>
+              Origen
+            </Tooltip>
+          </CircleMarker>
         )}
+
         {destino && (
           <CircleMarker
-            center={[
-              destino.latitud,
-              destino.longitud,
-            ]}
+            center={[destino.latitud, destino.longitud]}
             radius={8}
             pathOptions={{
               color: "#dc2626",
               fillColor: "#dc2626",
               fillOpacity: 0.9,
             }}
-          />
+          >
+            <Tooltip direction="top" offset={[0, -8]}>
+              Destino
+            </Tooltip>
+          </CircleMarker>
+        )}
+
+        {geometriaRuta.length >= 2 && (
+          <Polyline
+            positions={geometriaRuta}
+            pathOptions={{
+              color: "#16a34a",
+              weight: 6,
+              opacity: 0.9,
+            }}
+          >
+            <Tooltip
+              permanent
+              direction="top"
+              offset={[0, -8]}
+              opacity={0.95}
+            >
+              <div
+                style={{
+                  textAlign: "center",
+                  fontFamily: "Arial, sans-serif",
+                }}
+              >
+                <div>
+                  Distancia:{" "}
+                  {formatearDistancia(Number(ruta?.distancia_metros))}
+                </div>
+
+                <div>
+                  Riesgo: {ruta?.nivel_riesgo ?? "No disponible"}
+                </div>
+
+                <div>
+                  Puntaje:{" "}
+                  {Number.isFinite(Number(ruta?.puntaje_riesgo))
+                    ? Number(ruta?.puntaje_riesgo).toFixed(2)
+                    : "No disponible"}
+                </div>
+              </div>
+            </Tooltip>
+          </Polyline>
         )}
 
         <ControlZoom
@@ -838,6 +922,26 @@ export default function MapaRiesgoClient() {
           }}
         >
           {errorRuta}
+        </div>
+      )}
+
+      {ruta?.encontrada && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 20000,
+            bottom: 20,
+            right: 20,
+            background: "rgba(255,255,255,0.96)",
+            padding: "10px 14px",
+            borderRadius: 8,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+            fontFamily: "Arial, sans-serif",
+            fontSize: 14,
+            fontWeight: "bold",
+          }}
+        >
+          Distancia: {Number(ruta.distancia_metros).toFixed(2)} m
         </div>
       )}
     </div>
