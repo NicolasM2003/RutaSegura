@@ -17,7 +17,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.frontend"
     },
     "web": {
       "output": "static",
@@ -25,6 +26,13 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
+      [
+        "react-native-maps",
+        {
+          "androidGoogleMapsApiKey": "AIzaSyDfsd9y_xh5NeuqLOGY6wXEXmcxtIFtGWU"
+        }
+      ],
       [
         "expo-splash-screen",
         {

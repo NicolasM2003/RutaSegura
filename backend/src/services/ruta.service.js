@@ -614,12 +614,6 @@ const calcularRutaSegura = async ({
   rangoHorario,
   bbox,
 }) => {
-  if (!comuna) {
-    throw new Error(
-      "La comuna es obligatoria."
-    );
-  }
-
   if (
     !origen ||
     !Number.isFinite(
@@ -677,7 +671,7 @@ const calcularRutaSegura = async ({
     );
 
   console.log(
-    `RUTA - Calculando ${comuna}`
+    `RUTA - Calculando ${comuna || "área del mapa"}`
   );
 
   console.log(

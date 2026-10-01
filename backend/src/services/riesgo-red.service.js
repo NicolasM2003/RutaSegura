@@ -408,12 +408,6 @@ const obtenerRedPeatonalConRiesgo =
     rangoHorario,
     bbox,
   }) => {
-    if (!comuna) {
-      throw new Error(
-        "La comuna es obligatoria."
-      );
-    }
-
     const [zonas, red] =
       await Promise.all([
         obtenerZonasRiesgo({
