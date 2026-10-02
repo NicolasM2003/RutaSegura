@@ -237,12 +237,14 @@ const obtenerGrafoPeatonal = async ({
   highway,
   rangoHorario,
   bbox,
+  soloSupabase = false,
 } = {}) => {
   const vias =
     await obtenerRedPeatonalConRiesgo({
       comuna,
       rangoHorario,
       bbox,
+      soloSupabase,
     });
 
   const nodosMap = new Map();

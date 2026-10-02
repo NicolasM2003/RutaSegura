@@ -50,6 +50,7 @@ jest.mock("../../src/services/grafo-peatonal.service", () => ({
 }));
 
 const { calcularRutaSegura } = require("../../src/services/ruta.service");
+const { obtenerGrafoPeatonal } = require("../../src/services/grafo-peatonal.service");
 
 describe("Manejo de rutas sin conectividad", () => {
   test("debe devolver encontrada=false cuando no existe conexión", async () => {
@@ -70,5 +71,24 @@ describe("Manejo de rutas sin conectividad", () => {
     expect(resultado.mensaje).toBe(
       "No fue posible encontrar una ruta peatonal entre los puntos seleccionados."
     );
+  });
+
+  test("debe solicitar al grafo una red Supabase limitada por BBOX con margen", async () => {
+    await calcularRutaSegura({
+      comuna: "Viña del Mar",
+      origen: { latitud: -33.024, longitud: -71.551 },
+      destino: { latitud: -33.015, longitud: -71.535 },
+    });
+
+    expect(obtenerGrafoPeatonal).toHaveBeenLastCalledWith(expect.objectContaining({
+      comuna: "Viña del Mar",
+      soloSupabase: true,
+      bbox: expect.objectContaining({
+        minLat: expect.closeTo(-33.032983, 5),
+        maxLat: expect.closeTo(-33.006017, 5),
+        minLon: expect.closeTo(-71.5617, 3),
+        maxLon: expect.closeTo(-71.5243, 3),
+      }),
+    }));
   });
 });

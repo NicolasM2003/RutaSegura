@@ -770,7 +770,7 @@ const obtenerBboxDesdeSupabase = async (
   comuna,
   bbox
 ) => {
-  if (!comuna || !bbox) {
+  if (!bbox) {
     return [];
   }
 
@@ -778,13 +778,18 @@ const obtenerBboxDesdeSupabase = async (
   let offset = 0;
 
   while (true) {
+    let query = supabase
+      .from("red_peatonal")
+      .select("*");
+
+    if (comuna) {
+      query = query.eq("comuna", comuna);
+    }
+
     const {
       data,
       error,
-    } = await supabase
-      .from("red_peatonal")
-      .select("*")
-      .eq("comuna", comuna)
+    } = await query
       .lte(
         "bbox_min_lat",
         bbox.maxLat
@@ -927,9 +932,10 @@ const convertirSegmentoDesdeSupabase = (
  */
 const obtenerRedDesdeSupabase = async (
   comuna,
-  bbox
+  bbox,
+  { soloBbox = false } = {}
 ) => {
-  if (!comuna) {
+  if (!comuna && !bbox) {
     return [];
   }
 
@@ -951,6 +957,13 @@ const obtenerRedDesdeSupabase = async (
         return {
           encontrada: true,
           segmentos,
+        };
+      }
+
+      if (soloBbox) {
+        return {
+          encontrada: true,
+          segmentos: [],
         };
       }
 
@@ -1539,11 +1552,16 @@ const obtenerRedPeatonal = async ({
   highway,
   comuna,
   bbox,
+  soloSupabase = false,
 } = {}) => {
   const bboxNormalizado =
     normalizarBbox(
       bbox
     );
+
+  if (soloSupabase && (!bboxNormalizado || highway)) {
+    return [];
+  }
 
   /*
    * ========================================================
@@ -1665,11 +1683,12 @@ const obtenerRedPeatonal = async ({
    * ========================================================
    */
 
-  if (comuna) {
+  if (comuna || (soloSupabase && bboxNormalizado)) {
     const resultadoSupabase =
       await obtenerRedDesdeSupabase(
         comuna,
-        bboxNormalizado
+        bboxNormalizado,
+        { soloBbox: soloSupabase }
       );
 
     if (
@@ -1685,6 +1704,12 @@ const obtenerRedPeatonal = async ({
 
       return resultadoSupabase.segmentos;
     }
+  }
+
+  // Las rutas no deben consultar Overpass: los datos se cargan por separado
+  // y /api/rutas solo consume los segmentos ya persistidos en red_peatonal.
+  if (soloSupabase) {
+    return [];
   }
 
   /*
