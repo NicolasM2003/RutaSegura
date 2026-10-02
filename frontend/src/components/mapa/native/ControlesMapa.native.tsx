@@ -126,9 +126,9 @@ export default function ControlesMapa({
       </View>
       <Text style={styles.routeHint}>{instruccionRuta}</Text>
       {!!estadoUbicacion && <Text accessibilityLiveRegion="polite" style={styles.status}>{estadoUbicacion}</Text>}
-      {(cargando || error || (red && zoom < 12) || (delitos && zoom < 13)) &&
+      {(cargando || error || (red && !comuna) || (red && zoom < 12) || (delitos && zoom < 13)) &&
         <Text style={[styles.status, !!error && styles.error]}>
-          {error ?? (cargando ? "Actualizando capas…" : red && zoom < 12 ? "Acerca el mapa para cargar la red peatonal" : "Acerca el mapa (zoom 13) para ver delitos")}
+          {error ?? (red && !comuna ? "Selecciona una comuna para cargar la red peatonal" : red && zoom < 12 ? "Acerca el mapa para cargar la red peatonal" : cargando ? "Actualizando capas…" : "Acerca el mapa (zoom 13) para ver delitos")}
         </Text>}
     </View>
     <Modal visible={selector !== null} transparent animationType="fade" onRequestClose={() => setSelector(null)}>

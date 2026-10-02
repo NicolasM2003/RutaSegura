@@ -407,6 +407,7 @@ const obtenerRedPeatonalConRiesgo =
     comuna,
     rangoHorario,
     bbox,
+    soloSupabase = false,
   }) => {
     const [zonas, red] =
       await Promise.all([
@@ -418,6 +419,7 @@ const obtenerRedPeatonalConRiesgo =
         obtenerRedPeatonal({
           comuna,
           bbox,
+          soloSupabase,
         }),
       ]);
 

@@ -2,6 +2,36 @@ const {
   obtenerGrafoPeatonal,
 } = require("./grafo-peatonal.service");
 
+const METROS_POR_GRADO_LATITUD = 111_320;
+const MARGEN_BBOX_RUTA_METROS = (() => {
+  const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
+  return Number.isFinite(configurado) && configurado > 0
+    ? configurado
+    : 1_000;
+})();
+
+const limitar = (valor, minimo, maximo) =>
+  Math.min(maximo, Math.max(minimo, valor));
+
+const construirBboxRuta = (origen, destino) => {
+  const latitudes = [Number(origen.latitud), Number(destino.latitud)];
+  const longitudes = [Number(origen.longitud), Number(destino.longitud)];
+  const margenLatitud = MARGEN_BBOX_RUTA_METROS / METROS_POR_GRADO_LATITUD;
+  const latitudMayorEnValorAbsoluto = Math.max(...latitudes.map(Math.abs));
+  const cosenoLatitud = Math.max(
+    Math.cos((latitudMayorEnValorAbsoluto * Math.PI) / 180),
+    0.01,
+  );
+  const margenLongitud = margenLatitud / cosenoLatitud;
+
+  return {
+    minLat: limitar(Math.min(...latitudes) - margenLatitud, -90, 90),
+    minLon: limitar(Math.min(...longitudes) - margenLongitud, -180, 180),
+    maxLat: limitar(Math.max(...latitudes) + margenLatitud, -90, 90),
+    maxLon: limitar(Math.max(...longitudes) + margenLongitud, -180, 180),
+  };
+};
+
 /*
  * Calcula distancia Haversine entre dos coordenadas.
  */
@@ -612,7 +642,6 @@ const calcularRutaSegura = async ({
   origen,
   destino,
   rangoHorario,
-  bbox,
 }) => {
   if (
     !origen ||
@@ -670,6 +699,11 @@ const calcularRutaSegura = async ({
       destino.longitud
     );
 
+  const bboxRuta = construirBboxRuta(
+    { latitud: latOrigen, longitud: lonOrigen },
+    { latitud: latDestino, longitud: lonDestino },
+  );
+
   console.log(
     `RUTA - Calculando ${comuna || "área del mapa"}`
   );
@@ -689,7 +723,8 @@ const calcularRutaSegura = async ({
     await obtenerGrafoPeatonal({
       comuna,
       rangoHorario,
-      bbox,
+      bbox: bboxRuta,
+      soloSupabase: true,
     });
 
   if (
@@ -917,4 +952,5 @@ const calcularRutaSegura = async ({
 
 module.exports = {
   calcularRutaSegura,
+  construirBboxRuta,
 };

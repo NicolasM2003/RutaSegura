@@ -68,6 +68,15 @@ function zoomEstimado(region: Region) {
   return Math.round(Math.log2((360 * anchoDp) / (256 * Math.max(region.longitudeDelta, 0.00001))));
 }
 
+function bboxVisible(region: Region) {
+  const sur = Math.max(-90, region.latitude - region.latitudeDelta / 2);
+  const oeste = Math.max(-180, region.longitude - region.longitudeDelta / 2);
+  const norte = Math.min(90, region.latitude + region.latitudeDelta / 2);
+  const este = Math.min(180, region.longitude + region.longitudeDelta / 2);
+  // El endpoint existente espera: sur,oeste,norte,este.
+  return [sur, oeste, norte, este].map((value) => value.toFixed(6)).join(",");
+}
+
 function valor(value: unknown, fallback = "No informado") {
   return value === null || value === undefined || value === "" ? fallback : String(value);
 }
@@ -95,6 +104,7 @@ function FichaElemento({ elemento, cerrar }: { elemento: ElementoMapa; cerrar: (
 export default function MapaRiesgo() {
   const mapRef = useRef<MapView>(null);
   const redAbort = useRef<AbortController | null>(null);
+  const redConsultaKey = useRef<string | null>(null);
   const cargaId = useRef(0);
   const [region, setRegion] = useState(REGION_INICIAL);
   const [comuna, setComuna] = useState<string | null>(null);
@@ -104,7 +114,8 @@ export default function MapaRiesgo() {
   const [segmentos, setSegmentos] = useState<SegmentoPeatonal[]>([]);
   const [mostrarZonas, setMostrarZonas] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
-  const [mostrarRed, setMostrarRed] = useState(true);
+  const [mostrarRed, setMostrarRed] = useState(false);
+  const [cargandoRed, setCargandoRed] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seleccion, setSeleccion] = useState<ElementoMapa | null>(null);
@@ -333,39 +344,62 @@ export default function MapaRiesgo() {
     return () => controller.abort();
   }, [horario]);
 
+  const bbox = bboxVisible(region);
+  const zoomSuficiente = zoom >= 12;
   useEffect(() => {
-    // Al cambiar la selección se quita inmediatamente cualquier red anterior.
-    setSegmentos([]);
-    if (!mostrarRed || !comuna) {
+    if (!mostrarRed || !comuna || !zoomSuficiente) {
       redAbort.current?.abort();
+      redAbort.current = null;
+      redConsultaKey.current = null;
+      setSegmentos([]);
+      setCargandoRed(false);
       return;
     }
-    const controller = new AbortController();
+
+    const consultaKey = `${comuna}|${bbox}`;
+    if (
+      redConsultaKey.current === consultaKey &&
+      redAbort.current &&
+      !redAbort.current.signal.aborted
+    ) {
+      return;
+    }
+
     redAbort.current?.abort();
+    const controller = new AbortController();
     redAbort.current = controller;
+    redConsultaKey.current = consultaKey;
+    // Descarta los segmentos del viewport anterior antes de solicitar el nuevo.
+    setSegmentos([]);
+    setCargandoRed(true);
+    setError(null);
+
     const timer = setTimeout(async () => {
       try {
+        const params = new URLSearchParams({ comuna, bbox });
         const response = await fetch(
-          `${API_BASE_URL}/api/geografia/red-peatonal?comuna=${encodeURIComponent(comuna)}`,
+          `${API_BASE_URL}/api/geografia/red-peatonal?${params.toString()}`,
           { signal: controller.signal },
         );
         if (!response.ok) throw new Error(`Error red peatonal (HTTP ${response.status})`);
         const result = await response.json() as Carga<SegmentoPeatonal>;
         if (!controller.signal.aborted) {
           setSegmentos(result.data ?? []);
-          setError(null);
         }
       } catch (reason) {
         if (controller.signal.aborted) return;
         setSegmentos([]);
         setError(reason instanceof Error ? reason.message : "No se pudo cargar la red peatonal.");
+      } finally {
+        if (!controller.signal.aborted) setCargandoRed(false);
       }
     }, 400);
+
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [comuna, mostrarRed]);
+  }, [bbox, comuna, mostrarRed, zoomSuficiente]);
 
   const cambiarComuna = useCallback((nombre: string | null) => {
     setSegmentos([]);
@@ -393,7 +427,7 @@ export default function MapaRiesgo() {
       onPress={seleccionarPuntoMapa}
       onRegionChangeComplete={(nextRegion) => setRegion(nextRegion)}
     >
-      {mostrarRed && comuna !== null && <CapaRedPeatonal segmentos={segmentos} onSeleccionar={seleccionarElemento} />}
+      {mostrarRed && comuna !== null && zoom >= 12 && <CapaRedPeatonal segmentos={segmentos} onSeleccionar={seleccionarElemento} />}
       {mostrarZonas && <CapaZonasRiesgo
         zonas={zonasVisibles}
         zoom={zoom}
@@ -425,7 +459,7 @@ export default function MapaRiesgo() {
       onDelitos={() => setMostrarDelitos((visible) => !visible)}
       red={mostrarRed}
       onRed={() => setMostrarRed((visible) => !visible)}
-      cargando={cargando}
+      cargando={cargando || cargandoRed}
       error={error}
       zoom={zoom}
       onSolicitarUbicacion={solicitarUbicacion}
