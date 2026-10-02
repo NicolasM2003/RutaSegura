@@ -21,8 +21,6 @@ import {
   ControlesMapa,
   ControlZoom,
   EstadoRedPeatonal,
-  SelectorComuna,
-  SelectorHorario,
 } from "./ControlesMapa.web";
 
 import {
@@ -270,6 +268,15 @@ export default function MapaRiesgoClient() {
     const [cargandoRuta, setCargandoRuta] = useState(false);
 
     const [errorRuta, setErrorRuta] = useState<string | null>(null);
+  const rutaAbortRef = useRef<AbortController | null>(null);
+  const rutaIdRef = useRef(0);
+
+  const cancelarRutaPendiente = () => {
+    rutaIdRef.current += 1;
+    rutaAbortRef.current?.abort();
+    rutaAbortRef.current = null;
+    setCargandoRuta(false);
+  };
 
     const geometriaRuta = normalizarGeometriaRuta(ruta?.geometria);
     console.log(
@@ -278,6 +285,7 @@ export default function MapaRiesgoClient() {
     );
 
   const reiniciarPuntos = () => {
+    cancelarRutaPendiente();
     setOrigen(null);
     setDestino(null);
     setRuta(null);
@@ -293,6 +301,7 @@ export default function MapaRiesgoClient() {
       if (!origen) { setEstadoUbicacion("Primero establece un origen."); setModoSeleccion("origen"); return false; }
       setDestino(punto); setModoSeleccion(null);
     }
+    cancelarRutaPendiente();
     setPuntoParaCentrar(punto);
     setRuta(null); setErrorRuta(null); setEstadoUbicacion(null);
     return true;
@@ -443,9 +452,19 @@ export default function MapaRiesgoClient() {
   }, [rangoHorario]);
 
   useEffect(() => {
+    const id = ++rutaIdRef.current;
+    rutaAbortRef.current?.abort();
+    rutaAbortRef.current = null;
     if (!origen || !destino) {
+      setRuta(null);
+      setErrorRuta(null);
+      setCargandoRuta(false);
       return;
     }
+
+    const controlador = new AbortController();
+    rutaAbortRef.current = controlador;
+    setRuta(null);
 
     const consultarRuta = async () => {
       setCargandoRuta(true);
@@ -489,7 +508,7 @@ export default function MapaRiesgoClient() {
 
         console.log("Consultando ruta:", url);
 
-        const respuesta = await fetch(url);
+        const respuesta = await fetch(url, { signal: controlador.signal });
 
         if (!respuesta.ok) {
           throw new Error(
@@ -501,21 +520,25 @@ export default function MapaRiesgoClient() {
 
         console.log("Resultado ruta:", resultado);
 
+        if (controlador.signal.aborted || id !== rutaIdRef.current) return;
         setRuta(resultado);
       } catch (error) {
+        if (controlador.signal.aborted || id !== rutaIdRef.current) return;
          console.error("Error consultando ruta:", error);
 
         setRuta(null);
         setErrorRuta("No fue posible calcular la ruta. Inténtelo nuevamente.");
       }
       finally {
-        setTimeout(() => {
-          setCargandoRuta(false);
-        }, 1000);
+        if (id === rutaIdRef.current) setCargandoRuta(false);
       }
     };
 
-    consultarRuta();
+    void consultarRuta();
+    return () => {
+      controlador.abort();
+      if (rutaAbortRef.current === controlador) rutaAbortRef.current = null;
+    };
   }, [
     origen,
     destino,
@@ -792,49 +815,50 @@ export default function MapaRiesgoClient() {
           )}
       </MapContainer>
 
-      <SelectorComuna
-        comuna={
-          comunaRedPeatonal
+      <UbicacionesMapaWeb
+        origen={origen}
+        destino={destino}
+        modo={modoSeleccion}
+        comuna={comunaRedPeatonal}
+        rangoHorario={rangoHorario}
+        alElegirModo={(modo) => {
+          if (
+            modo === "destino" &&
+            !origen
+          ) {
+            setEstadoUbicacion(
+              "Primero establece un origen."
+            );
+            setModoSeleccion("origen");
+            return;
+          }
+
+          setEstadoUbicacion(null);
+          setModoSeleccion(modo);
+        }}
+        alReiniciar={reiniciarPuntos}
+        alUsarMiUbicacion={
+          usarMiUbicacion
         }
-        onChange={
+        alCambiarComuna={
           setComunaRedPeatonal
         }
-      />
-
-      <SelectorHorario
-        rangoHorario={
-          rangoHorario
-        }
-        onChange={
+        alCambiarHorario={
           setRangoHorario
         }
+        buscandoUbicacion={
+          buscandoUbicacion
+        }
+        estadoUbicacion={
+          estadoUbicacion
+        }
+        buscarDireccion={
+          buscarDireccion
+        }
+        seleccionarDireccion={
+          seleccionarDireccion
+        }
       />
-
-      <UbicacionesMapaWeb origen={origen} destino={destino} modo={modoSeleccion} alElegirModo={(modo) => { if (modo === "destino" && !origen) { setEstadoUbicacion("Primero establece un origen."); setModoSeleccion("origen"); return; } setEstadoUbicacion(null); setModoSeleccion(modo); }} alReiniciar={reiniciarPuntos} alUsarMiUbicacion={usarMiUbicacion} buscandoUbicacion={buscandoUbicacion} estadoUbicacion={estadoUbicacion} buscarDireccion={buscarDireccion} seleccionarDireccion={seleccionarDireccion} />
-
-      {origen && destino && (
-        <button
-          type="button"
-          onClick={reiniciarPuntos}
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            top: 75,
-            left: 15,
-            background: "#ffffff",
-            color: "#111827",
-            border: "none",
-            borderRadius: 8,
-            padding: "10px 14px",
-            fontWeight: "bold",
-            fontSize: 14,
-            cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-          }}
-        >
-          Cambiar puntos
-        </button>
-      )}
 
       <BotonRedPeatonal
         mostrar={

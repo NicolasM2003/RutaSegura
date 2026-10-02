@@ -131,6 +131,13 @@ export default function MapaRiesgo() {
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
   const rutaId = useRef(0);
+  const rutaAbort = useRef<AbortController | null>(null);
+  const cancelarRutaPendiente = useCallback(() => {
+    rutaId.current += 1;
+    rutaAbort.current?.abort();
+    rutaAbort.current = null;
+    setCargandoRuta(false);
+  }, []);
   const zoom = zoomEstimado(region);
   const seleccionarElemento = useCallback((item: ElementoMapa) => setSeleccion(item), []);
   const cambiarZonas = useCallback(() => {
@@ -139,6 +146,7 @@ export default function MapaRiesgo() {
   }, []);
 
   const limpiarRuta = useCallback(() => {
+    cancelarRutaPendiente();
     setOrigen(null);
     setDestino(null);
     setRuta(null);
@@ -147,9 +155,10 @@ export default function MapaRiesgo() {
     setSeleccion(null);
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
-  }, []);
+  }, [cancelarRutaPendiente]);
 
   const elegirOrigen = useCallback(() => {
+    cancelarRutaPendiente();
     setDestino(null);
     setRuta(null);
     setErrorRuta(null);
@@ -157,17 +166,18 @@ export default function MapaRiesgo() {
     setSeleccion(null);
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
-  }, []);
+  }, [cancelarRutaPendiente]);
 
   const elegirDestino = useCallback(() => {
     if (!origen) return;
+    cancelarRutaPendiente();
     setDestino(null);
     setRuta(null);
     setErrorRuta(null);
     setModoSeleccion("destino");
     setSeleccion(null);
     setZonaDestinoDetectada(undefined);
-  }, [origen]);
+  }, [origen, cancelarRutaPendiente]);
 
   const solicitarUbicacion = useCallback(async () => {
     setCargandoUbicacion(true);
@@ -189,6 +199,7 @@ export default function MapaRiesgo() {
         return;
       }
       setUbicacion(punto);
+      cancelarRutaPendiente();
       setOrigen(punto);
       setDestino(null);
       setZonaOrigenDetectada(analizarPuntoSeleccionado({ latitude: punto.latitud, longitude: punto.longitud }, zonas).zonaProxima);
@@ -209,7 +220,7 @@ export default function MapaRiesgo() {
     } finally {
       setCargandoUbicacion(false);
     }
-  }, [zonas]);
+  }, [zonas, cancelarRutaPendiente]);
 
   const buscarDireccion = useCallback((consulta: string, tipo: DestinoRuta) => {
     if (tipo === "destino" && !origen) throw new Error("Establece primero un origen para buscar destinos cercanos.");
@@ -217,6 +228,11 @@ export default function MapaRiesgo() {
     return buscarDirecciones(API_BASE_URL, consulta, referencia);
   }, [origen, ubicacion, region.latitude, region.longitude]);
   const seleccionarDireccion = useCallback((tipo: DestinoRuta, resultado: ResultadoDireccion) => {
+    if (tipo === "destino" && !origen) {
+      setEstadoUbicacion("Primero establece un origen para seleccionar el destino.");
+      return;
+    }
+    cancelarRutaPendiente();
     const punto = { latitud: resultado.latitud, longitud: resultado.longitud };
     const { zonaProxima } = analizarPuntoSeleccionado({ latitude: punto.latitud, longitude: punto.longitud }, zonas);
     setSeleccion(null);
@@ -229,19 +245,16 @@ export default function MapaRiesgo() {
       setZonaDestinoDetectada(undefined);
       setModoSeleccion("destino");
     } else {
-      if (!origen) {
-        setEstadoUbicacion("Primero establece un origen para seleccionar el destino.");
-        return;
-      }
       setDestino(punto);
       setZonaDestinoDetectada(zonaProxima);
       setModoSeleccion(null);
     }
     mapRef.current?.animateToRegion({ latitude: punto.latitud, longitude: punto.longitud, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 600);
-  }, [origen, zonas]);
+  }, [origen, zonas, cancelarRutaPendiente]);
 
   const seleccionarPuntoMapa = useCallback((event: { nativeEvent: { coordinate: { latitude: number; longitude: number } } }) => {
     if (!modoSeleccion) return;
+    cancelarRutaPendiente();
     const { latitude, longitude } = event.nativeEvent.coordinate;
     const { punto, zonaProxima } = analizarPuntoSeleccionado({ latitude, longitude }, zonas);
     setSeleccion(null);
@@ -258,16 +271,21 @@ export default function MapaRiesgo() {
       setZonaDestinoDetectada(zonaProxima);
       setModoSeleccion(null);
     }
-  }, [modoSeleccion, zonas]);
+  }, [modoSeleccion, zonas, cancelarRutaPendiente]);
 
   useEffect(() => {
+    const id = ++rutaId.current;
+    rutaAbort.current?.abort();
+    rutaAbort.current = null;
     if (!origen || !destino) {
       setRuta(null);
+      setErrorRuta(null);
       setCargandoRuta(false);
       return;
     }
-    const id = ++rutaId.current;
     const controller = new AbortController();
+    rutaAbort.current = controller;
+    setRuta(null);
     const params = new URLSearchParams({
       origen_lat: String(origen.latitud),
       origen_lon: String(origen.longitud),
@@ -292,7 +310,10 @@ export default function MapaRiesgo() {
         if (id === rutaId.current) setCargandoRuta(false);
       }
     })();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (rutaAbort.current === controller) rutaAbort.current = null;
+    };
   }, [origen, destino, horario]);
 
   useEffect(() => {
@@ -438,7 +459,14 @@ export default function MapaRiesgo() {
         habilitarSeleccionZona={!modoSeleccion}
       />}
       {delitosVisibles.length > 0 && <CapaDelitos delitos={delitosVisibles} onSeleccionar={seleccionarElemento} />}
-      {ruta?.encontrada !== false && Array.isArray(ruta?.geometria) && <CapaRuta geometria={ruta.geometria as Array<[number, number]>} />}
+      <CapaRuta
+        geometria={
+          ruta?.encontrada !== false &&
+          Array.isArray(ruta?.geometria)
+            ? (ruta.geometria as Array<[number, number]>)
+            : []
+        }
+      />
       <CapaPuntosRuta origen={origen} destino={destino} ubicacion={ubicacion} />
     </MapView>
     <ControlesMapa

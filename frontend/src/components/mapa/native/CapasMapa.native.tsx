@@ -102,15 +102,34 @@ export function CapaPuntosRuta({
   );
 }
 
-export function CapaRuta({ geometria }: { geometria: Array<[number, number]> }) {
-  if (geometria.length < 2) return null;
+export function CapaRuta({
+  geometria,
+}: {
+  geometria: Array<[number, number]>;
+}) {
+  const coordinates = geometria
+    .map(([latitude, longitude]) => ({
+      latitude,
+      longitude,
+    }))
+    .filter(
+      ({ latitude, longitude }) =>
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude)
+    );
 
   return (
     <Polyline
-      coordinates={geometria.map(([latitude, longitude]) => ({ latitude, longitude }))}
+      coordinates={
+        coordinates.length >= 2
+          ? coordinates
+          : []
+      }
       strokeColor="#16a34a"
       strokeWidth={6}
       zIndex={15}
+      lineCap="round"
+      lineJoin="round"
     />
   );
 }
