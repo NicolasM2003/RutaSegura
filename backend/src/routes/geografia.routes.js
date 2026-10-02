@@ -1,4 +1,5 @@
 const express = require("express");
+const { buscarDireccionController } = require("../controllers/geocoding.controller");
 
 const {
   obtenerGeografia,
@@ -8,6 +9,8 @@ const {
 } = require("../controllers/geografia.controller");
 
 const router = express.Router();
+
+router.get("/buscar-direccion", buscarDireccionController);
 
 router.get(
   "/",

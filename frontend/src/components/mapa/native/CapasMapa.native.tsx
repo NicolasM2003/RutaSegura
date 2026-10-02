@@ -5,6 +5,7 @@ import {
   Polyline,
 } from "react-native-maps";
 import { StyleSheet, View } from "react-native";
+import { claveZonaRiesgo } from "./zonas";
 
 export type ZonaRiesgo = {
   id_zona?: string | number;
@@ -65,18 +66,28 @@ export type PuntoRuta = {
 export function CapaPuntosRuta({
   origen,
   destino,
+  ubicacion,
 }: {
   origen: PuntoRuta | null;
   destino: PuntoRuta | null;
+  ubicacion?: PuntoRuta | null;
 }) {
   return (
     <>
+      {ubicacion && (
+        <Marker
+          coordinate={{ latitude: ubicacion.latitud, longitude: ubicacion.longitud }}
+          pinColor="#0284c7"
+          title="Mi ubicación"
+          zIndex={100}
+        />
+      )}
       {origen && (
         <Marker
           coordinate={{ latitude: origen.latitud, longitude: origen.longitud }}
           pinColor="#2563eb"
           title="Origen"
-          zIndex={20}
+          zIndex={101}
         />
       )}
       {destino && (
@@ -84,7 +95,7 @@ export function CapaPuntosRuta({
           coordinate={{ latitude: destino.latitud, longitude: destino.longitud }}
           pinColor="#dc2626"
           title="Destino"
-          zIndex={21}
+          zIndex={102}
         />
       )}
     </>
@@ -141,11 +152,17 @@ export function CapaZonasRiesgo({
   zoom,
   onSeleccionar,
   visible,
+  zonaOrigenSeleccionada,
+  zonaDestinoSeleccionada,
+  habilitarSeleccionZona = true,
 }: {
   zonas: ZonaRiesgo[];
   zoom: number;
   onSeleccionar: (item: ElementoMapa) => void;
   visible: boolean;
+  zonaOrigenSeleccionada?: string | null;
+  zonaDestinoSeleccionada?: string | null;
+  habilitarSeleccionZona?: boolean;
 }) {
   if (!visible) {
     return null;
@@ -177,6 +194,20 @@ export function CapaZonasRiesgo({
             ) ?? [156, 163, 175];
 
         const key = `${zona.comuna ?? ""}-${zona.id_zona ?? index}`;
+        const zoneKey = claveZonaRiesgo(zona);
+        const esOrigen = zoneKey === zonaOrigenSeleccionada;
+        const esDestino = zoneKey === zonaDestinoSeleccionada;
+        const colorSeleccion = esOrigen && esDestino
+          ? "#7c3aed"
+          : esDestino
+            ? "#f97316"
+            : esOrigen
+              ? "#2563eb"
+              : color;
+        const rgbSeleccion = colorSeleccion
+          .slice(1)
+          .match(/.{2}/g)
+          ?.map((value) => Number.parseInt(value, 16)) ?? [37, 99, 235];
 
         return (
           <Fragment key={key}>
@@ -186,12 +217,14 @@ export function CapaZonasRiesgo({
                 longitude,
               }}
               radius={radioZonaPorZoom(zoom)}
-              strokeColor={color}
-              fillColor={`rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${opacidadZonaPorZoom(zoom)})`}
-              strokeWidth={zoom <= 11 ? 1 : 2}
+              strokeColor={colorSeleccion}
+              fillColor={esOrigen || esDestino
+                ? `rgba(${rgbSeleccion[0]}, ${rgbSeleccion[1]}, ${rgbSeleccion[2]}, 0.32)`
+                : `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${opacidadZonaPorZoom(zoom)})`}
+              strokeWidth={esOrigen || esDestino ? 4 : zoom <= 11 ? 1 : 2}
             />
 
-            <Marker
+            {habilitarSeleccionZona && <Marker
               coordinate={{
                 latitude,
                 longitude,
@@ -202,6 +235,7 @@ export function CapaZonasRiesgo({
               }}
               tracksViewChanges={false}
               opacity={0}
+              zIndex={5}
               onPress={() =>
                 onSeleccionar({
                   tipo: "zona",
@@ -212,7 +246,7 @@ export function CapaZonasRiesgo({
               <View
                 style={styles.zoneTouchTarget}
               />
-            </Marker>
+            </Marker>}
           </Fragment>
         );
       })}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
-import MapView, { type Region } from "react-native-maps";
+import * as Location from "expo-location";
+import MapView, { PROVIDER_GOOGLE, type Region } from "react-native-maps";
 import ControlesMapa, { RANGOS_HORARIOS } from "./ControlesMapa.native";
 import {
   CapaDelitos,
@@ -15,6 +16,8 @@ import {
   type ZonaRiesgo,
 } from "./CapasMapa.native";
 import { API_BASE_URL } from "./api";
+import { analizarPuntoSeleccionado, claveZonaRiesgo, type ZonaProxima } from "./zonas";
+import { buscarDirecciones, type DestinoRuta, type ResultadoDireccion } from "../direccion";
 
 const REGION_INICIAL: Region = {
   latitude: -33.0245,
@@ -107,6 +110,11 @@ export default function MapaRiesgo() {
   const [seleccion, setSeleccion] = useState<ElementoMapa | null>(null);
   const [origen, setOrigen] = useState<PuntoRuta | null>(null);
   const [destino, setDestino] = useState<PuntoRuta | null>(null);
+  const [ubicacion, setUbicacion] = useState<PuntoRuta | null>(null);
+  const [cargandoUbicacion, setCargandoUbicacion] = useState(false);
+  const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
+  const [zonaOrigenDetectada, setZonaOrigenDetectada] = useState<ZonaProxima<ZonaRiesgo> | null | undefined>(undefined);
+  const [zonaDestinoDetectada, setZonaDestinoDetectada] = useState<ZonaProxima<ZonaRiesgo> | null | undefined>(undefined);
   const [modoSeleccion, setModoSeleccion] = useState<"origen" | "destino" | null>(null);
   const [ruta, setRuta] = useState<ResultadoRuta | null>(null);
   const [cargandoRuta, setCargandoRuta] = useState(false);
@@ -126,6 +134,8 @@ export default function MapaRiesgo() {
     setErrorRuta(null);
     setModoSeleccion(null);
     setSeleccion(null);
+    setZonaOrigenDetectada(undefined);
+    setZonaDestinoDetectada(undefined);
   }, []);
 
   const elegirOrigen = useCallback(() => {
@@ -134,6 +144,8 @@ export default function MapaRiesgo() {
     setErrorRuta(null);
     setModoSeleccion("origen");
     setSeleccion(null);
+    setZonaOrigenDetectada(undefined);
+    setZonaDestinoDetectada(undefined);
   }, []);
 
   const elegirDestino = useCallback(() => {
@@ -143,24 +155,99 @@ export default function MapaRiesgo() {
     setErrorRuta(null);
     setModoSeleccion("destino");
     setSeleccion(null);
+    setZonaDestinoDetectada(undefined);
   }, [origen]);
+
+  const solicitarUbicacion = useCallback(async () => {
+    setCargandoUbicacion(true);
+    setEstadoUbicacion(null);
+    try {
+      const permiso = await Location.requestForegroundPermissionsAsync();
+      if (permiso.status !== "granted") {
+        setEstadoUbicacion("Permiso denegado. Puedes elegir el origen o destino tocando el mapa.");
+        return;
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        setEstadoUbicacion("Activa la ubicación del dispositivo o selecciona un punto manualmente en el mapa.");
+        return;
+      }
+      const posicion = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const punto = { latitud: posicion.coords.latitude, longitud: posicion.coords.longitude };
+      if (!Number.isFinite(punto.latitud) || !Number.isFinite(punto.longitud)) {
+        setEstadoUbicacion("No se obtuvo una ubicación válida. Puedes seleccionar un punto manualmente.");
+        return;
+      }
+      setUbicacion(punto);
+      setOrigen(punto);
+      setDestino(null);
+      setZonaOrigenDetectada(analizarPuntoSeleccionado({ latitude: punto.latitud, longitude: punto.longitud }, zonas).zonaProxima);
+      setZonaDestinoDetectada(undefined);
+      setRuta(null);
+      setErrorRuta(null);
+      setModoSeleccion("destino");
+      mapRef.current?.animateToRegion({
+        latitude: punto.latitud,
+        longitude: punto.longitud,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
+      }, 800);
+      setEstadoUbicacion("Ubicación actual establecida como origen. Elige o busca un destino.");
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : "No fue posible obtener la ubicación.";
+      setEstadoUbicacion(`${detail} Puedes seleccionar un punto manualmente en el mapa.`);
+    } finally {
+      setCargandoUbicacion(false);
+    }
+  }, [zonas]);
+
+  const buscarDireccion = useCallback((consulta: string, tipo: DestinoRuta) => {
+    if (tipo === "destino" && !origen) throw new Error("Establece primero un origen para buscar destinos cercanos.");
+    const referencia = tipo === "destino" && origen ? origen : origen ?? ubicacion ?? { latitud: region.latitude, longitud: region.longitude };
+    return buscarDirecciones(API_BASE_URL, consulta, referencia);
+  }, [origen, ubicacion, region.latitude, region.longitude]);
+  const seleccionarDireccion = useCallback((tipo: DestinoRuta, resultado: ResultadoDireccion) => {
+    const punto = { latitud: resultado.latitud, longitud: resultado.longitud };
+    const { zonaProxima } = analizarPuntoSeleccionado({ latitude: punto.latitud, longitude: punto.longitud }, zonas);
+    setSeleccion(null);
+    setRuta(null);
+    setErrorRuta(null);
+    if (tipo === "origen") {
+      setOrigen(punto);
+      setDestino(null);
+      setZonaOrigenDetectada(zonaProxima);
+      setZonaDestinoDetectada(undefined);
+      setModoSeleccion("destino");
+    } else {
+      if (!origen) {
+        setEstadoUbicacion("Primero establece un origen para seleccionar el destino.");
+        return;
+      }
+      setDestino(punto);
+      setZonaDestinoDetectada(zonaProxima);
+      setModoSeleccion(null);
+    }
+    mapRef.current?.animateToRegion({ latitude: punto.latitud, longitude: punto.longitud, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 600);
+  }, [origen, zonas]);
 
   const seleccionarPuntoMapa = useCallback((event: { nativeEvent: { coordinate: { latitude: number; longitude: number } } }) => {
     if (!modoSeleccion) return;
     const { latitude, longitude } = event.nativeEvent.coordinate;
-    const point = { latitud: latitude, longitud: longitude };
+    const { punto, zonaProxima } = analizarPuntoSeleccionado({ latitude, longitude }, zonas);
     setSeleccion(null);
     setRuta(null);
     setErrorRuta(null);
     if (modoSeleccion === "origen") {
-      setOrigen(point);
+      setOrigen(punto);
       setDestino(null);
+      setZonaOrigenDetectada(zonaProxima);
+      setZonaDestinoDetectada(undefined);
       setModoSeleccion("destino");
     } else {
-      setDestino(point);
+      setDestino(punto);
+      setZonaDestinoDetectada(zonaProxima);
       setModoSeleccion(null);
     }
-  }, [modoSeleccion]);
+  }, [modoSeleccion, zonas]);
 
   useEffect(() => {
     if (!origen || !destino) {
@@ -295,6 +382,7 @@ export default function MapaRiesgo() {
     <MapView
       key={`map-zonas-${mostrarZonas}`}
       ref={mapRef}
+      provider={PROVIDER_GOOGLE}
       accessibilityLabel="Mapa de RutaSegura, centrado en Viña del Mar"
       style={StyleSheet.absoluteFill}
       initialRegion={region}
@@ -306,10 +394,18 @@ export default function MapaRiesgo() {
       onRegionChangeComplete={(nextRegion) => setRegion(nextRegion)}
     >
       {mostrarRed && comuna !== null && <CapaRedPeatonal segmentos={segmentos} onSeleccionar={seleccionarElemento} />}
-      {mostrarZonas && <CapaZonasRiesgo zonas={zonasVisibles} zoom={zoom} visible={mostrarZonas} onSeleccionar={seleccionarElemento} />}
+      {mostrarZonas && <CapaZonasRiesgo
+        zonas={zonasVisibles}
+        zoom={zoom}
+        visible={mostrarZonas}
+        onSeleccionar={seleccionarElemento}
+        zonaOrigenSeleccionada={zonaOrigenDetectada ? claveZonaRiesgo(zonaOrigenDetectada.zona) : null}
+        zonaDestinoSeleccionada={zonaDestinoDetectada ? claveZonaRiesgo(zonaDestinoDetectada.zona) : null}
+        habilitarSeleccionZona={!modoSeleccion}
+      />}
       {delitosVisibles.length > 0 && <CapaDelitos delitos={delitosVisibles} onSeleccionar={seleccionarElemento} />}
       {ruta?.encontrada !== false && Array.isArray(ruta?.geometria) && <CapaRuta geometria={ruta.geometria as Array<[number, number]>} />}
-      <CapaPuntosRuta origen={origen} destino={destino} />
+      <CapaPuntosRuta origen={origen} destino={destino} ubicacion={ubicacion} />
     </MapView>
     <ControlesMapa
       origen={origen}
@@ -332,10 +428,23 @@ export default function MapaRiesgo() {
       cargando={cargando}
       error={error}
       zoom={zoom}
+      onSolicitarUbicacion={solicitarUbicacion}
+      cargandoUbicacion={cargandoUbicacion}
+      estadoUbicacion={estadoUbicacion}
+      onBuscarDireccion={buscarDireccion}
+      onSeleccionarDireccion={seleccionarDireccion}
     />
     {cargando && <View pointerEvents="none" style={styles.loading}><ActivityIndicator size="small" color="#1d4ed8" /></View>}
     {cargandoRuta && <View pointerEvents="none" style={[styles.loading, { top: 202 }]}><ActivityIndicator size="small" color="#16a34a" /></View>}
     {seleccion && <FichaElemento elemento={seleccion} cerrar={() => setSeleccion(null)} />}
+    {(zonaOrigenDetectada || zonaDestinoDetectada) && !seleccion && !cargandoRuta && <View style={[styles.zoneAssociationCard, (ruta || errorRuta) && styles.zoneAssociationAboveRoute]}>
+      {zonaOrigenDetectada && <Text style={[styles.zoneAssociationLine, styles.originAssociation]}>
+        {`Origen: zona ${zonaOrigenDetectada.zona.nivel} a ${Math.round(zonaOrigenDetectada.distanciaMetros)} m`}
+      </Text>}
+      {zonaDestinoDetectada && <Text style={[styles.zoneAssociationLine, styles.destinationAssociation]}>
+        {`Destino: zona ${zonaDestinoDetectada.zona.nivel} a ${Math.round(zonaDestinoDetectada.distanciaMetros)} m`}
+      </Text>}
+    </View>}
     {(ruta || errorRuta || (origen && destino && cargandoRuta)) && !seleccion && <View style={styles.routeCard}>
       <Text style={styles.routeTitle}>Información de la ruta</Text>
       {cargandoRuta && <View style={styles.routeStatusRow}>
@@ -368,4 +477,9 @@ const styles = StyleSheet.create({
   routeLoading: { color: "#1d4ed8", fontWeight: "600" },
   routeSuccess: { color: "#15803d", fontWeight: "600" },
   routeError: { color: "#b91c1c" },
+  zoneAssociationCard: { position: "absolute", bottom: 22, left: 12, right: 12, backgroundColor: "rgba(255,255,255,0.96)", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, elevation: 6 },
+  zoneAssociationAboveRoute: { bottom: 126 },
+  zoneAssociationLine: { fontSize: 12, fontWeight: "700", paddingVertical: 2 },
+  originAssociation: { color: "#1d4ed8" },
+  destinationAssociation: { color: "#c2410c" },
 });
