@@ -11,6 +11,7 @@ import {
   useMapEvents,
   Polyline,
   Tooltip,
+  useMap,
 } from "react-leaflet";
 
 import {
@@ -20,8 +21,6 @@ import {
   ControlesMapa,
   ControlZoom,
   EstadoRedPeatonal,
-  SelectorComuna,
-  SelectorHorario,
 } from "./ControlesMapa.web";
 
 import {
@@ -30,6 +29,8 @@ import {
   CapaZonasRiesgo,
   LeyendaMapa,
 } from "./CapasMapa.web";
+import UbicacionesMapaWeb from "./UbicacionesMapa.web";
+import { buscarDirecciones, type DestinoRuta, type ResultadoDireccion } from "../direccion";
 
 /**
  * Escucha los movimientos y cambios de zoom del mapa
@@ -123,44 +124,30 @@ function EscuchaBbox({
 }
 
 export function SeleccionarPuntos({
-  origen,
-  destino,
-  onSeleccionarOrigen,
-  onSeleccionarDestino,
+  modo,
+  onSeleccionarPunto,
 }: {
-  origen: {
-    latitud: number;
-    longitud: number;
-  } | null;
-  destino: {
-    latitud: number;
-    longitud: number;
-  } | null;
-  onSeleccionarOrigen: (
-    latitud: number,
-    longitud: number
-  ) => void;
-  onSeleccionarDestino: (
+  modo: DestinoRuta | null;
+  onSeleccionarPunto: (tipo: DestinoRuta,
     latitud: number,
     longitud: number
   ) => void;
 }) {
   useMapEvents({
     click: (evento) => {
-      const latitud = evento.latlng.lat;
-      const longitud = evento.latlng.lng;
-
-      if (!origen) {
-        onSeleccionarOrigen(latitud, longitud);
-        return;
-      }
-
-      if (!destino) {
-        onSeleccionarDestino(latitud, longitud);
-      }
+      if (!modo) return;
+      onSeleccionarPunto(modo, evento.latlng.lat, evento.latlng.lng);
     },
   });
 
+  return null;
+}
+
+function CentrarPunto({ punto }: { punto: { latitud: number; longitud: number } | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (punto) map.flyTo([punto.latitud, punto.longitud], Math.max(map.getZoom(), 15), { duration: 0.6 });
+  }, [map, punto]);
   return null;
 }
 
@@ -270,12 +257,26 @@ export default function MapaRiesgoClient() {
     latitud: number;
     longitud: number;
   } | null>(null);
+  const [modoSeleccion, setModoSeleccion] = useState<DestinoRuta | null>("origen");
+  const [ubicacionActual, setUbicacionActual] = useState<{ latitud: number; longitud: number } | null>(null);
+  const [puntoParaCentrar, setPuntoParaCentrar] = useState<{ latitud: number; longitud: number } | null>(null);
+  const [buscandoUbicacion, setBuscandoUbicacion] = useState(false);
+  const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
 
     const [ruta, setRuta] = useState<any>(null);
 
     const [cargandoRuta, setCargandoRuta] = useState(false);
 
     const [errorRuta, setErrorRuta] = useState<string | null>(null);
+  const rutaAbortRef = useRef<AbortController | null>(null);
+  const rutaIdRef = useRef(0);
+
+  const cancelarRutaPendiente = () => {
+    rutaIdRef.current += 1;
+    rutaAbortRef.current?.abort();
+    rutaAbortRef.current = null;
+    setCargandoRuta(false);
+  };
 
     const geometriaRuta = normalizarGeometriaRuta(ruta?.geometria);
     console.log(
@@ -284,10 +285,54 @@ export default function MapaRiesgoClient() {
     );
 
   const reiniciarPuntos = () => {
+    cancelarRutaPendiente();
     setOrigen(null);
     setDestino(null);
     setRuta(null);
     setErrorRuta(null);
+    setModoSeleccion("origen");
+  };
+
+  const seleccionarPunto = (tipo: DestinoRuta, latitud: number, longitud: number): boolean => {
+    const punto = { latitud, longitud };
+    if (tipo === "origen") {
+      setOrigen(punto); setDestino(null); setModoSeleccion("destino");
+    } else {
+      if (!origen) { setEstadoUbicacion("Primero establece un origen."); setModoSeleccion("origen"); return false; }
+      setDestino(punto); setModoSeleccion(null);
+    }
+    cancelarRutaPendiente();
+    setPuntoParaCentrar(punto);
+    setRuta(null); setErrorRuta(null); setEstadoUbicacion(null);
+    return true;
+  };
+
+  const usarMiUbicacion = () => {
+    if (!navigator.geolocation) { setEstadoUbicacion("Este navegador no ofrece geolocalización. Puedes seleccionar el punto en el mapa o buscar una dirección."); return; }
+    setBuscandoUbicacion(true); setEstadoUbicacion(null);
+    navigator.geolocation.getCurrentPosition((posicion) => {
+      const punto = { latitud: posicion.coords.latitude, longitud: posicion.coords.longitude };
+      setUbicacionActual(punto); seleccionarPunto("origen", punto.latitud, punto.longitud);
+      setEstadoUbicacion("Ubicación actual establecida como origen."); setBuscandoUbicacion(false);
+    }, (reason) => {
+      setEstadoUbicacion(reason.code === reason.PERMISSION_DENIED ? "Permiso de ubicación denegado. Puedes elegir un punto en el mapa o buscar una dirección." : "No se pudo obtener la ubicación. Puedes elegir un punto en el mapa o buscar una dirección.");
+      setBuscandoUbicacion(false);
+    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+  };
+
+  const buscarDireccion = (consulta: string, tipo: DestinoRuta) => {
+    if (tipo === "destino" && !origen) throw new Error("Establece primero un origen para buscar destinos cercanos.");
+    const limites = bbox?.split(",").map(Number);
+    const centroMapa = limites?.length === 4 && limites.every(Number.isFinite)
+      ? { latitud: (limites[0] + limites[2]) / 2, longitud: (limites[1] + limites[3]) / 2 }
+      : { latitud: -33.0245, longitud: -71.5518 };
+    const referencia = tipo === "destino" && origen ? origen : origen ?? ubicacionActual ?? centroMapa;
+    return buscarDirecciones("http://localhost:3000", consulta, referencia);
+  };
+  const seleccionarDireccion = (tipo: DestinoRuta, resultado: ResultadoDireccion) => {
+    if (seleccionarPunto(tipo, resultado.latitud, resultado.longitud)) {
+      setEstadoUbicacion(`${tipo === "origen" ? "Origen" : "Destino"} establecido desde la dirección seleccionada.`);
+    }
   };
 
   /*
@@ -407,9 +452,19 @@ export default function MapaRiesgoClient() {
   }, [rangoHorario]);
 
   useEffect(() => {
+    const id = ++rutaIdRef.current;
+    rutaAbortRef.current?.abort();
+    rutaAbortRef.current = null;
     if (!origen || !destino) {
+      setRuta(null);
+      setErrorRuta(null);
+      setCargandoRuta(false);
       return;
     }
+
+    const controlador = new AbortController();
+    rutaAbortRef.current = controlador;
+    setRuta(null);
 
     const consultarRuta = async () => {
       setCargandoRuta(true);
@@ -453,7 +508,7 @@ export default function MapaRiesgoClient() {
 
         console.log("Consultando ruta:", url);
 
-        const respuesta = await fetch(url);
+        const respuesta = await fetch(url, { signal: controlador.signal });
 
         if (!respuesta.ok) {
           throw new Error(
@@ -465,21 +520,25 @@ export default function MapaRiesgoClient() {
 
         console.log("Resultado ruta:", resultado);
 
+        if (controlador.signal.aborted || id !== rutaIdRef.current) return;
         setRuta(resultado);
       } catch (error) {
+        if (controlador.signal.aborted || id !== rutaIdRef.current) return;
          console.error("Error consultando ruta:", error);
 
         setRuta(null);
         setErrorRuta("No fue posible calcular la ruta. Inténtelo nuevamente.");
       }
       finally {
-        setTimeout(() => {
-          setCargandoRuta(false);
-        }, 1000);
+        if (id === rutaIdRef.current) setCargandoRuta(false);
       }
     };
 
-    consultarRuta();
+    void consultarRuta();
+    return () => {
+      controlador.abort();
+      if (rutaAbortRef.current === controlador) rutaAbortRef.current = null;
+    };
   }, [
     origen,
     destino,
@@ -639,22 +698,10 @@ export default function MapaRiesgoClient() {
           }
         />
 
-        <SeleccionarPuntos
-  origen={origen}
-  destino={destino}
-  onSeleccionarOrigen={(latitud, longitud) =>
-    setOrigen({
-      latitud,
-      longitud,
-    })
-  }
-  onSeleccionarDestino={(latitud, longitud) =>
-    setDestino({
-      latitud,
-      longitud,
-    })
-  }
-/>
+        <SeleccionarPuntos modo={modoSeleccion} onSeleccionarPunto={seleccionarPunto} />
+        <CentrarPunto punto={puntoParaCentrar} />
+
+        {ubicacionActual && <CircleMarker center={[ubicacionActual.latitud, ubicacionActual.longitud]} radius={6} pathOptions={{ color: "#0f766e", fillColor: "#14b8a6", fillOpacity: 1 }}><Tooltip direction="top">Mi ubicación</Tooltip></CircleMarker>}
 
         {origen && (
           <CircleMarker
@@ -768,47 +815,50 @@ export default function MapaRiesgoClient() {
           )}
       </MapContainer>
 
-      <SelectorComuna
-        comuna={
-          comunaRedPeatonal
+      <UbicacionesMapaWeb
+        origen={origen}
+        destino={destino}
+        modo={modoSeleccion}
+        comuna={comunaRedPeatonal}
+        rangoHorario={rangoHorario}
+        alElegirModo={(modo) => {
+          if (
+            modo === "destino" &&
+            !origen
+          ) {
+            setEstadoUbicacion(
+              "Primero establece un origen."
+            );
+            setModoSeleccion("origen");
+            return;
+          }
+
+          setEstadoUbicacion(null);
+          setModoSeleccion(modo);
+        }}
+        alReiniciar={reiniciarPuntos}
+        alUsarMiUbicacion={
+          usarMiUbicacion
         }
-        onChange={
+        alCambiarComuna={
           setComunaRedPeatonal
         }
-      />
-
-      <SelectorHorario
-        rangoHorario={
-          rangoHorario
-        }
-        onChange={
+        alCambiarHorario={
           setRangoHorario
         }
+        buscandoUbicacion={
+          buscandoUbicacion
+        }
+        estadoUbicacion={
+          estadoUbicacion
+        }
+        buscarDireccion={
+          buscarDireccion
+        }
+        seleccionarDireccion={
+          seleccionarDireccion
+        }
       />
-
-      {origen && destino && (
-        <button
-          type="button"
-          onClick={reiniciarPuntos}
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            top: 75,
-            left: 15,
-            background: "#ffffff",
-            color: "#111827",
-            border: "none",
-            borderRadius: 8,
-            padding: "10px 14px",
-            fontWeight: "bold",
-            fontSize: 14,
-            cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-          }}
-        >
-          Cambiar puntos
-        </button>
-      )}
 
       <BotonRedPeatonal
         mostrar={

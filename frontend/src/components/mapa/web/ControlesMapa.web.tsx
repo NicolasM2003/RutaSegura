@@ -1,8 +1,5 @@
 import { useEffect, useRef } from "react";
-import {
-  useMap,
-  useMapEvents,
-} from "react-leaflet";
+import { useMap, useMapEvents } from "react-leaflet";
 
 type CentroComuna = {
   latitud: number;
@@ -10,22 +7,17 @@ type CentroComuna = {
   zoom: number;
 };
 
-export const CENTROS_COMUNAS: Record<
-  string,
-  CentroComuna
-> = {
+export const CENTROS_COMUNAS: Record<string, CentroComuna> = {
   "Viña del Mar": {
     latitud: -33.0245,
     longitud: -71.5518,
     zoom: 13,
   },
-
   Valparaíso: {
     latitud: -33.0472,
     longitud: -71.6127,
     zoom: 13,
   },
-
   Concón: {
     latitud: -32.9225,
     longitud: -71.5147,
@@ -36,15 +28,11 @@ export const CENTROS_COMUNAS: Record<
 export function ControlZoom({
   setZoom,
 }: {
-  setZoom: (
-    zoom: number
-  ) => void;
+  setZoom: (zoom: number) => void;
 }) {
   useMapEvents({
     zoomend: (event: any) => {
-      setZoom(
-        event.target.getZoom()
-      );
+      setZoom(event.target.getZoom());
     },
   });
 
@@ -57,52 +45,33 @@ export function CentrarComuna({
   comuna: string;
 }) {
   const map = useMap();
-
-  const ultimaComuna =
-    useRef<string | null>(
-      null
-    );
+  const ultimaComuna = useRef<string | null>(null);
 
   useEffect(() => {
-    if (
-      ultimaComuna.current ===
-      comuna
-    ) {
-      return;
-    }
+    if (ultimaComuna.current === comuna) return;
 
-    const centro =
-      CENTROS_COMUNAS[
-        comuna
-      ];
+    const centro = CENTROS_COMUNAS[comuna];
 
-    if (!centro) {
-      return;
-    }
+    if (!centro) return;
 
-    ultimaComuna.current =
-      comuna;
+    ultimaComuna.current = comuna;
 
-    /*
-     * Solo centramos cuando
-     * cambia la comuna.
-     *
-     * NO usamos fitBounds().
-     */
-    map.flyTo(
-      [
-        centro.latitud,
-        centro.longitud,
-      ],
-      centro.zoom,
-      {
-        duration: 0.8,
-      }
-    );
+    map.flyTo([centro.latitud, centro.longitud], centro.zoom, {
+      duration: 0.8,
+    });
   }, [comuna, map]);
 
   return null;
 }
+
+const estiloBoton = {
+  border: "1px solid #d1d5db",
+  borderRadius: 8,
+  background: "#ffffff",
+  color: "#111827",
+  fontWeight: 700,
+  cursor: "pointer",
+};
 
 export function ControlesMapa() {
   const map = useMap();
@@ -112,36 +81,29 @@ export function ControlesMapa() {
       style={{
         position: "absolute",
         zIndex: 10000,
-        right: 15,
-        bottom: 15,
+        right: 16,
+        bottom: 90,
         display: "flex",
-        flexDirection:
-          "column",
+        flexDirection: "column",
         overflow: "hidden",
-        borderRadius: 8,
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.25)",
+        borderRadius: 10,
+        border: "1px solid #d1d5db",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
       }}
     >
       <button
         type="button"
-        onClick={() =>
-          map.zoomIn()
-        }
+        aria-label="Acercar mapa"
+        onClick={() => map.zoomIn()}
         style={{
-          width: 40,
-          height: 40,
+          ...estiloBoton,
+          width: 42,
+          height: 42,
           border: "none",
-          borderBottom:
-            "1px solid #d1d5db",
-          background:
-            "#ffffff",
-          color:
-            "#111827",
+          borderBottom: "1px solid #e5e7eb",
+          borderRadius: 0,
           fontSize: 22,
-          fontWeight:
-            "bold",
-          cursor: "pointer",
+          lineHeight: 1,
         }}
       >
         +
@@ -149,21 +111,16 @@ export function ControlesMapa() {
 
       <button
         type="button"
-        onClick={() =>
-          map.zoomOut()
-        }
+        aria-label="Alejar mapa"
+        onClick={() => map.zoomOut()}
         style={{
-          width: 40,
-          height: 40,
+          ...estiloBoton,
+          width: 42,
+          height: 42,
           border: "none",
-          background:
-            "#ffffff",
-          color:
-            "#111827",
+          borderRadius: 0,
           fontSize: 22,
-          fontWeight:
-            "bold",
-          cursor: "pointer",
+          lineHeight: 1,
         }}
       >
         −
@@ -177,78 +134,122 @@ export function SelectorComuna({
   onChange,
 }: {
   comuna: string;
-  onChange: (
-    comuna: string
-  ) => void;
+  onChange: (comuna: string) => void;
 }) {
   return (
     <div
       style={{
-        position:
-          "absolute",
+        position: "absolute",
         zIndex: 10000,
-        top: 15,
-        left: 15,
-        background:
-          "rgba(255,255,255,0.96)",
-        padding:
-          "9px 12px",
-        borderRadius: 8,
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.25)",
-        fontFamily:
-          "Arial, sans-serif",
+        top: 16,
+        left: 16,
+        width: 145,
+        padding: "9px 11px",
+        borderRadius: 10,
+        background: "rgba(255,255,255,0.97)",
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.16)",
+        fontFamily: "Arial, sans-serif",
       }}
     >
       <div
         style={{
-          fontSize: 11,
-          fontWeight:
-            "bold",
+          fontSize: 10,
+          fontWeight: 800,
+          color: "#6b7280",
           marginBottom: 5,
-          color:
-            "#374151",
+          letterSpacing: 0.5,
         }}
       >
-        RED PEATONAL
+        COMUNA
       </div>
 
       <select
         value={comuna}
-        onChange={(event) =>
-          onChange(
-            event.target.value
-          )
-        }
+        onChange={(event) => onChange(event.target.value)}
         style={{
-          border:
-            "1px solid #d1d5db",
-          borderRadius: 6,
-          padding:
-            "7px 9px",
-          background:
-            "#ffffff",
-          color:
-            "#111827",
-          fontSize: 13,
-          fontWeight:
-            "bold",
-          cursor:
-            "pointer",
+          width: "100%",
+          border: "1px solid #d1d5db",
+          borderRadius: 7,
+          padding: "7px 8px",
+          background: "#ffffff",
+          color: "#111827",
+          fontSize: 12,
+          fontWeight: 700,
           outline: "none",
+          cursor: "pointer",
         }}
       >
-        <option value="Viña del Mar">
-          Viña del Mar
-        </option>
+        <option value="Viña del Mar">Viña del Mar</option>
+        <option value="Valparaíso">Valparaíso</option>
+        <option value="Concón">Concón</option>
+      </select>
+    </div>
+  );
+}
 
-        <option value="Valparaíso">
-          Valparaíso
-        </option>
+export function SelectorHorario({
+  rangoHorario,
+  onChange,
+}: {
+  rangoHorario: string;
+  onChange: (rangoHorario: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        zIndex: 10000,
+        top: 16,
+        left: 172,
+        width: 145,
+        padding: "9px 11px",
+        borderRadius: 10,
+        background: "rgba(255,255,255,0.97)",
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.16)",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 800,
+          color: "#6b7280",
+          marginBottom: 5,
+          letterSpacing: 0.5,
+        }}
+      >
+        HORARIO
+      </div>
 
-        <option value="Concón">
-          Concón
-        </option>
+      <select
+        value={rangoHorario}
+        onChange={(event) => {
+          const valor = event.target.value;
+
+          if (!esRangoHorarioValido(valor)) return;
+
+          onChange(valor);
+        }}
+        style={{
+          width: "100%",
+          border: "1px solid #d1d5db",
+          borderRadius: 7,
+          padding: "7px 8px",
+          background: "#ffffff",
+          color: "#111827",
+          fontSize: 12,
+          fontWeight: 700,
+          outline: "none",
+          cursor: "pointer",
+        }}
+      >
+        {RANGOS_HORARIOS.map((rango) => (
+          <option key={rango} value={rango}>
+            {rango}
+          </option>
+        ))}
       </select>
     </div>
   );
@@ -266,37 +267,23 @@ export function BotonRedPeatonal({
       type="button"
       onClick={onClick}
       style={{
-        position:
-          "absolute",
+        position: "absolute",
         zIndex: 10000,
-        top: 15,
-        right: 15,
-        background:
-          mostrar
-            ? "#2563eb"
-            : "#ffffff",
-        color:
-          mostrar
-            ? "#ffffff"
-            : "#111827",
-        border: "none",
-        borderRadius: 8,
-        padding:
-          "10px 14px",
-        fontWeight:
-          "bold",
-        fontSize: 14,
-        cursor:
-          "pointer",
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.25)",
-        whiteSpace:
-          "nowrap",
+        top: 16,
+        right: 16,
+        border: "1px solid #d1d5db",
+        borderRadius: 9,
+        padding: "9px 13px",
+        background: mostrar ? "#2563eb" : "#ffffff",
+        color: mostrar ? "#ffffff" : "#111827",
+        fontWeight: 700,
+        fontSize: 13,
+        cursor: "pointer",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
+        whiteSpace: "nowrap",
       }}
     >
-      {mostrar
-        ? "Ocultar red peatonal"
-        : "Mostrar red peatonal"}
+      {mostrar ? "Ocultar red peatonal" : "Mostrar red peatonal"}
     </button>
   );
 }
@@ -313,37 +300,23 @@ export function BotonDelitos({
       type="button"
       onClick={onClick}
       style={{
-        position:
-          "absolute",
+        position: "absolute",
         zIndex: 10000,
-        top: 15,
-        right: 175,
-        background:
-          mostrar
-            ? "#111827"
-            : "#ffffff",
-        color:
-          mostrar
-            ? "#ffffff"
-            : "#111827",
-        border: "none",
-        borderRadius: 8,
-        padding:
-          "10px 14px",
-        fontWeight:
-          "bold",
-        fontSize: 14,
-        cursor:
-          "pointer",
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.25)",
-        whiteSpace:
-          "nowrap",
+        top: 16,
+        right: 185,
+        border: "1px solid #d1d5db",
+        borderRadius: 9,
+        padding: "9px 13px",
+        background: mostrar ? "#111827" : "#ffffff",
+        color: mostrar ? "#ffffff" : "#111827",
+        fontWeight: 700,
+        fontSize: 13,
+        cursor: "pointer",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
+        whiteSpace: "nowrap",
       }}
     >
-      {mostrar
-        ? "Ocultar delitos"
-        : "Mostrar delitos"}
+      {mostrar ? "Ocultar delitos" : "Mostrar delitos"}
     </button>
   );
 }
@@ -355,34 +328,22 @@ export function EstadoRedPeatonal({
   cargando: boolean;
   error: boolean;
 }) {
-  if (
-    !cargando &&
-    !error
-  ) {
-    return null;
-  }
+  if (!cargando && !error) return null;
 
   return (
     <div
       style={{
-        position:
-          "absolute",
+        position: "absolute",
         zIndex: 10000,
-        top: 65,
-        right: 15,
-        background:
-          "rgba(255,255,255,0.96)",
-        color:
-          error
-            ? "#b91c1c"
-            : "#111827",
-        padding:
-          "8px 12px",
-        borderRadius: 8,
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.2)",
-        fontFamily:
-          "Arial, sans-serif",
+        top: 66,
+        right: 16,
+        background: "rgba(255,255,255,0.97)",
+        color: error ? "#b91c1c" : "#374151",
+        padding: "8px 12px",
+        borderRadius: 9,
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
+        fontFamily: "Arial, sans-serif",
         fontSize: 12,
       }}
     >
@@ -404,77 +365,4 @@ export const RANGOS_HORARIOS = [
 
 export const esRangoHorarioValido = (
   rangoHorario: string
-): boolean => {
-  return RANGOS_HORARIOS.includes(
-    rangoHorario
-  );
-};
-
-export function SelectorHorario({
-  rangoHorario,
-  onChange,
-}: {
-  rangoHorario: string;
-  onChange: (rangoHorario: string) => void;
-}) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        zIndex: 10000,
-        top: 15,
-        left: 175,
-        background: "rgba(255,255,255,0.96)",
-        padding: "9px 12px",
-        borderRadius: 8,
-        boxShadow:
-          "0 2px 8px rgba(0,0,0,0.25)",
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: "bold",
-          marginBottom: 5,
-          color: "#374151",
-        }}
-      >
-        HORARIO
-      </div>
-
-      <select
-        value={rangoHorario}
-        onChange={(event) => {
-        const valor =
-          event.target.value;
-
-        if (
-          !esRangoHorarioValido(valor)
-        ) {
-          return;
-        }
-
-        onChange(valor);
-      }}
-        style={{
-          border: "1px solid #d1d5db",
-          borderRadius: 6,
-          padding: "7px 9px",
-          background: "#ffffff",
-          color: "#111827",
-          fontSize: 13,
-          fontWeight: "bold",
-          cursor: "pointer",
-          outline: "none",
-        }}
-      >
-        {RANGOS_HORARIOS.map((rango) => (
-          <option key={rango} value={rango}>
-            {rango}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
+): boolean => RANGOS_HORARIOS.includes(rangoHorario);

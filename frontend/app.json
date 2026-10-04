@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "RutaSegura",
+    "slug": "rutasegura",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "rutasegura",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
@@ -18,7 +18,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.frontend"
+      "package": "com.rutasegura.app",
+      "usesCleartextTraffic": true
     },
     "web": {
       "output": "static",
@@ -27,6 +28,7 @@
     "plugins": [
       "expo-router",
       "expo-dev-client",
+      "expo-location",
       [
         "react-native-maps",
         {
