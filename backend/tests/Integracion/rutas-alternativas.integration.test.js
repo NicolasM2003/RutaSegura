@@ -271,6 +271,12 @@ describe("Generación de rutas alternativas", () => {
       ["O", "B", "D"],
       ["O", "A", "D"],
     ]);
+
+    expect(
+      resultado.rutas.map(
+        (ruta) => ruta.tiempo_estimado_minutos
+      )
+    ).toEqual([2.8, 1.7, 1.4]);
   });
 
   test("debe consultar el grafo peatonal una sola vez", async () => {

@@ -8,6 +8,10 @@ const {
 
 const METROS_POR_GRADO_LATITUD = 111_320;
 
+// Velocidad peatonal inicial para estimar el tiempo de recorrido.
+// Valor provisional: 1,2 metros por segundo.
+const VELOCIDAD_PEATONAL_METROS_SEGUNDO = 1.2;
+
 const MARGEN_BBOX_RUTA_METROS = (() => {
   const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
 
@@ -543,6 +547,13 @@ const calcularResumenRuta = ({
     distanciaTotal > 0
       ? riesgoPonderado / distanciaTotal
       : 0;
+  
+  const tiempoEstimadoSegundos =
+  distanciaTotal /
+  VELOCIDAD_PEATONAL_METROS_SEGUNDO;
+
+  const tiempoEstimadoMinutos =
+    Number((tiempoEstimadoSegundos / 60).toFixed(1));
 
   let nivelRiesgo = "Bajo";
 
@@ -556,6 +567,9 @@ const calcularResumenRuta = ({
     distancia_metros: Number(
       distanciaTotal.toFixed(2)
     ),
+
+    tiempo_estimado_minutos:
+      tiempoEstimadoMinutos,
 
     costo_navegacion: Number(
       costoTotal.toFixed(4)

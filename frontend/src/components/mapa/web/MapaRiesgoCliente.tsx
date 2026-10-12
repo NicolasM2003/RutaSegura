@@ -278,11 +278,14 @@ export default function MapaRiesgoClient() {
     setCargandoRuta(false);
   };
 
-    const geometriaRuta = normalizarGeometriaRuta(ruta?.geometria);
-    console.log(
-      "Geometría ruta normalizada:",
-      geometriaRuta
-    );
+    const rutasAlternativas = Array.isArray(ruta?.rutas)
+      ? ruta.rutas.map((alternativa: any) => ({
+          ...alternativa,
+          geometria: normalizarGeometriaRuta(
+            alternativa.geometria
+          ),
+        }))
+      : [];
 
   const reiniciarPuntos = () => {
     cancelarRutaPendiente();
@@ -504,7 +507,7 @@ export default function MapaRiesgoClient() {
         );
 
         const url =
-          `http://localhost:3000/api/rutas?${parametros.toString()}`;
+          `http://localhost:3000/api/rutas/alternativas?${parametros.toString()}`;
 
         console.log("Consultando ruta:", url);
 
@@ -518,10 +521,18 @@ export default function MapaRiesgoClient() {
 
         const resultado = await respuesta.json();
 
-        console.log("Resultado ruta:", resultado);
+        console.log("Resultado rutas alternativas:", resultado);
 
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
         setRuta(resultado);
+
+        if (resultado.encontrada === false) {
+          setErrorRuta(
+            resultado.mensaje ??
+              "No se encontraron rutas para los puntos seleccionados."
+          );
+        }
+
       } catch (error) {
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
          console.error("Error consultando ruta:", error);
@@ -735,46 +746,78 @@ export default function MapaRiesgoClient() {
           </CircleMarker>
         )}
 
-        {geometriaRuta.length >= 2 && (
-          <Polyline
-            positions={geometriaRuta}
-            pathOptions={{
-              color: "#16a34a",
-              weight: 6,
-              opacity: 0.9,
-            }}
-          >
-            <Tooltip
-              permanent
-              direction="top"
-              offset={[0, -8]}
-              opacity={0.95}
-            >
-              <div
-                style={{
-                  textAlign: "center",
-                  fontFamily: "Arial, sans-serif",
-                }}
-              >
-                <div>
-                  Distancia:{" "}
-                  {formatearDistancia(Number(ruta?.distancia_metros))}
-                </div>
+        {[...rutasAlternativas].reverse().map(
+            (alternativa: any) => {
+              const geometria = alternativa.geometria as [
+                number,
+                number
+              ][];
 
-                <div>
-                  Riesgo: {ruta?.nivel_riesgo ?? "No disponible"}
-                </div>
+              if (geometria.length < 2) {
+                return null;
+              }
 
-                <div>
-                  Puntaje:{" "}
-                  {Number.isFinite(Number(ruta?.puntaje_riesgo))
-                    ? Number(ruta?.puntaje_riesgo).toFixed(2)
-                    : "No disponible"}
-                </div>
-              </div>
-            </Tooltip>
-          </Polyline>
-        )}
+              const colorRuta =
+                alternativa.perfil_ruta === "menor_riesgo"
+                  ? "#16a34a"
+                  : alternativa.perfil_ruta === "equilibrada"
+                    ? "#2563eb"
+                    : alternativa.perfil_ruta === "mas_rapida"
+                      ? "#ea580c"
+                      : "#64748b";
+
+              return (
+                <Polyline
+                  key={alternativa.perfil_ruta}
+                  positions={geometria}
+                  pathOptions={{
+                    color: colorRuta,
+                    weight: 5,
+                    opacity: 0.9,
+                  }}
+                >
+                  <Tooltip direction="top" offset={[0, -8]}>
+                    <div
+                      style={{
+                        textAlign: "center",
+                        fontFamily: "Arial, sans-serif",
+                      }}
+                    >
+                      <strong>
+                        {alternativa.nombre_perfil_ruta}
+                      </strong>
+
+                      <div>
+                        Distancia:{" "}
+                        {formatearDistancia(
+                          Number(alternativa.distancia_metros)
+                        )}
+                      </div>
+
+                      <div>
+                        Tiempo:{" "}
+                        {Number(
+                          alternativa.tiempo_estimado_minutos
+                        ).toFixed(1)}{" "}
+                        min
+                      </div>
+
+                      <div>
+                        Riesgo: {alternativa.nivel_riesgo}
+                      </div>
+
+                      <div>
+                        Puntaje:{" "}
+                        {Number(
+                          alternativa.puntaje_riesgo
+                        ).toFixed(2)}
+                      </div>
+                    </div>
+                  </Tooltip>
+                </Polyline>
+              );
+            }
+          )}
 
         <ControlZoom
           setZoom={setZoom}
@@ -975,25 +1018,89 @@ export default function MapaRiesgoClient() {
         </div>
       )}
 
-      {ruta?.encontrada && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            bottom: 20,
-            right: 20,
-            background: "rgba(255,255,255,0.96)",
-            padding: "10px 14px",
-            borderRadius: 8,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-            fontFamily: "Arial, sans-serif",
-            fontSize: 14,
-            fontWeight: "bold",
-          }}
-        >
-          Distancia: {Number(ruta.distancia_metros).toFixed(2)} m
-        </div>
-      )}
+      {ruta?.encontrada && rutasAlternativas.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              zIndex: 20000,
+              bottom: 20,
+              right: 20,
+              width: 320,
+              maxWidth: "calc(100% - 32px)",
+              maxHeight: "45%",
+              overflowY: "auto",
+              background: "rgba(255,255,255,0.97)",
+              padding: "14px",
+              borderRadius: 10,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+              fontFamily: "Arial, sans-serif",
+              color: "#1f2937",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 16,
+                fontWeight: "bold",
+                marginBottom: 10,
+              }}
+            >
+              Alternativas de ruta
+            </div>
+
+            {rutasAlternativas.map((alternativa: any) => {
+              const color =
+                alternativa.perfil_ruta === "menor_riesgo"
+                  ? "#16a34a"
+                  : alternativa.perfil_ruta === "equilibrada"
+                    ? "#2563eb"
+                    : "#ea580c";
+
+              return (
+                <div
+                  key={alternativa.perfil_ruta}
+                  style={{
+                    borderLeft: `4px solid ${color}`,
+                    padding: "7px 0 7px 10px",
+                    marginBottom: 8,
+                    borderBottom: "1px solid #e5e7eb",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: "bold",
+                      fontSize: 14,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {alternativa.nombre_perfil_ruta}
+                  </div>
+
+                  <div style={{ fontSize: 13, marginBottom: 3 }}>
+                    Distancia:{" "}
+                    {formatearDistancia(
+                      Number(alternativa.distancia_metros)
+                    )}
+                    {" · "}
+                    Tiempo:{" "}
+                    {Number(
+                      alternativa.tiempo_estimado_minutos
+                    ).toFixed(1)}{" "}
+                    min
+                  </div>
+
+                  <div style={{ fontSize: 13 }}>
+                    Riesgo: {alternativa.nivel_riesgo}
+                    {" · "}
+                    Puntaje:{" "}
+                    {Number(
+                      alternativa.puntaje_riesgo
+                    ).toFixed(2)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
     </div>
   );
 }
