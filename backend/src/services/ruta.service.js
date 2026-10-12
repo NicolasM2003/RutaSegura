@@ -2,9 +2,15 @@ const {
   obtenerGrafoPeatonal,
 } = require("./grafo-peatonal.service");
 
+const {
+  PERFILES_RUTA,
+} = require("../config/perfiles-ruta.config");
+
 const METROS_POR_GRADO_LATITUD = 111_320;
+
 const MARGEN_BBOX_RUTA_METROS = (() => {
   const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
+
   return Number.isFinite(configurado) && configurado > 0
     ? configurado
     : 1_000;
@@ -14,21 +20,92 @@ const limitar = (valor, minimo, maximo) =>
   Math.min(maximo, Math.max(minimo, valor));
 
 const construirBboxRuta = (origen, destino) => {
-  const latitudes = [Number(origen.latitud), Number(destino.latitud)];
-  const longitudes = [Number(origen.longitud), Number(destino.longitud)];
-  const margenLatitud = MARGEN_BBOX_RUTA_METROS / METROS_POR_GRADO_LATITUD;
-  const latitudMayorEnValorAbsoluto = Math.max(...latitudes.map(Math.abs));
+  const latitudes = [
+    Number(origen.latitud),
+    Number(destino.latitud),
+  ];
+
+  const longitudes = [
+    Number(origen.longitud),
+    Number(destino.longitud),
+  ];
+
+  const margenLatitud =
+    MARGEN_BBOX_RUTA_METROS /
+    METROS_POR_GRADO_LATITUD;
+
+  const latitudMayorEnValorAbsoluto =
+    Math.max(...latitudes.map(Math.abs));
+
   const cosenoLatitud = Math.max(
-    Math.cos((latitudMayorEnValorAbsoluto * Math.PI) / 180),
+    Math.cos(
+      (latitudMayorEnValorAbsoluto * Math.PI) / 180
+    ),
     0.01,
   );
-  const margenLongitud = margenLatitud / cosenoLatitud;
+
+  const margenLongitud =
+    margenLatitud / cosenoLatitud;
 
   return {
-    minLat: limitar(Math.min(...latitudes) - margenLatitud, -90, 90),
-    minLon: limitar(Math.min(...longitudes) - margenLongitud, -180, 180),
-    maxLat: limitar(Math.max(...latitudes) + margenLatitud, -90, 90),
-    maxLon: limitar(Math.max(...longitudes) + margenLongitud, -180, 180),
+    minLat: limitar(
+      Math.min(...latitudes) - margenLatitud,
+      -90,
+      90
+    ),
+
+    minLon: limitar(
+      Math.min(...longitudes) - margenLongitud,
+      -180,
+      180
+    ),
+
+    maxLat: limitar(
+      Math.max(...latitudes) + margenLatitud,
+      -90,
+      90
+    ),
+
+    maxLon: limitar(
+      Math.max(...longitudes) + margenLongitud,
+      -180,
+      180
+    ),
+  };
+};
+
+/*
+ * Valida y normaliza las coordenadas de origen y destino.
+ */
+const normalizarCoordenadasRuta = ({
+  origen,
+  destino,
+}) => {
+  if (
+    !origen ||
+    !Number.isFinite(Number(origen.latitud)) ||
+    !Number.isFinite(Number(origen.longitud))
+  ) {
+    throw new Error(
+      "El origen debe contener latitud y longitud válidas."
+    );
+  }
+
+  if (
+    !destino ||
+    !Number.isFinite(Number(destino.latitud)) ||
+    !Number.isFinite(Number(destino.longitud))
+  ) {
+    throw new Error(
+      "El destino debe contener latitud y longitud válidas."
+    );
+  }
+
+  return {
+    latOrigen: Number(origen.latitud),
+    lonOrigen: Number(origen.longitud),
+    latDestino: Number(destino.latitud),
+    lonDestino: Number(destino.longitud),
   };
 };
 
@@ -87,15 +164,6 @@ const distanciaHaversine = (
 /*
  * Busca el nodo del grafo más cercano
  * a una coordenada.
- *
- * El grafo actual entrega:
- *
- * {
- *   id,
- *   latitud,
- *   longitud,
- *   conexiones
- * }
  */
 const obtenerNodoMasCercanoEnGrafo = (
   nodos,
@@ -127,15 +195,11 @@ const obtenerNodoMasCercanoEnGrafo = (
   }
 
   let nodoMasCercano = null;
-
   let distanciaMinima = Infinity;
 
   for (const nodo of nodos) {
-    const nodoLatitud =
-      Number(nodo.latitud);
-
-    const nodoLongitud =
-      Number(nodo.longitud);
+    const nodoLatitud = Number(nodo.latitud);
+    const nodoLongitud = Number(nodo.longitud);
 
     if (
       !Number.isFinite(nodoLatitud) ||
@@ -144,22 +208,16 @@ const obtenerNodoMasCercanoEnGrafo = (
       continue;
     }
 
-    const distancia =
-      distanciaHaversine(
-        lat,
-        lon,
-        nodoLatitud,
-        nodoLongitud
-      );
+    const distancia = distanciaHaversine(
+      lat,
+      lon,
+      nodoLatitud,
+      nodoLongitud
+    );
 
-    if (
-      distancia < distanciaMinima
-    ) {
-      distanciaMinima =
-        distancia;
-
-      nodoMasCercano =
-        nodo;
+    if (distancia < distanciaMinima) {
+      distanciaMinima = distancia;
+      nodoMasCercano = nodo;
     }
   }
 
@@ -171,37 +229,77 @@ const obtenerNodoMasCercanoEnGrafo = (
 
   return {
     nodo: nodoMasCercano,
-
-    distancia_metros:
-      Number(
-        distanciaMinima.toFixed(2)
-      ),
+    distancia_metros: Number(
+      distanciaMinima.toFixed(2)
+    ),
   };
 };
 
 /*
- * Cola de prioridad simple.
+ * Valida el grafo peatonal obtenido.
+ */
+const validarGrafoPeatonal = (grafo) => {
+  if (!grafo?.nodos || !grafo?.aristas) {
+    throw new Error(
+      "El grafo peatonal no contiene nodos o aristas."
+    );
+  }
+
+  if (
+    grafo.nodos.length === 0 ||
+    grafo.aristas.length === 0
+  ) {
+    throw new Error(
+      "No existe una red peatonal disponible para la comuna."
+    );
+  }
+
+  return grafo;
+};
+
+/*
+ * Obtiene el grafo para un trayecto.
  *
- * Se utilizará para Dijkstra.
+ * Esta función se ejecuta una sola vez en
+ * calcularRutasAlternativas().
+ */
+const obtenerGrafoRuta = async ({
+  comuna,
+  origen,
+  destino,
+  rangoHorario,
+}) => {
+  const bboxRuta = construirBboxRuta(
+    origen,
+    destino
+  );
+
+  const grafo = await obtenerGrafoPeatonal({
+    comuna,
+    rangoHorario,
+    bbox: bboxRuta,
+    soloSupabase: true,
+  });
+
+  return validarGrafoPeatonal(grafo);
+};
+
+/*
+ * Cola de prioridad simple para Dijkstra.
  */
 class ColaPrioridad {
   constructor() {
     this.items = [];
   }
 
-  insertar(
-    item,
-    prioridad
-  ) {
+  insertar(item, prioridad) {
     this.items.push({
       item,
       prioridad,
     });
 
     this.items.sort(
-      (a, b) =>
-        a.prioridad -
-        b.prioridad
+      (a, b) => a.prioridad - b.prioridad
     );
   }
 
@@ -212,192 +310,141 @@ class ColaPrioridad {
   get size() {
     return this.items.length;
   }
-}
+};
 
 /*
- * Construye la lista de vecinos
- * de cada nodo.
- *
+ * Construye la lista de vecinos de cada nodo.
  * Las aristas son bidireccionales.
  */
-const construirAdyacencia = (
-  aristas
-) => {
-  const adyacencia =
-    new Map();
+const construirAdyacencia = (aristas) => {
+  const adyacencia = new Map();
 
-  for (
-    const arista of aristas
-  ) {
-    if (
-      !adyacencia.has(
-        arista.nodo_origen
-      )
-    ) {
-      adyacencia.set(
-        arista.nodo_origen,
-        []
-      );
+  for (const arista of aristas) {
+    if (!adyacencia.has(arista.nodo_origen)) {
+      adyacencia.set(arista.nodo_origen, []);
     }
 
-    if (
-      !adyacencia.has(
-        arista.nodo_destino
-      )
-    ) {
-      adyacencia.set(
-        arista.nodo_destino,
-        []
-      );
+    if (!adyacencia.has(arista.nodo_destino)) {
+      adyacencia.set(arista.nodo_destino, []);
     }
 
-    adyacencia
-      .get(
-        arista.nodo_origen
-      )
-      .push({
-        nodo:
-          arista.nodo_destino,
-        arista,
-      });
+    adyacencia.get(arista.nodo_origen).push({
+      nodo: arista.nodo_destino,
+      arista,
+    });
 
-    adyacencia
-      .get(
-        arista.nodo_destino
-      )
-      .push({
-        nodo:
-          arista.nodo_origen,
-        arista,
-      });
+    adyacencia.get(arista.nodo_destino).push({
+      nodo: arista.nodo_origen,
+      arista,
+    });
   }
 
   return adyacencia;
 };
 
 /*
- * Dijkstra utilizando
- * costo_arista como peso.
+ * Calcula el costo de una arista según el perfil.
+ *
+ * Sin perfil, conserva el costo de navegación existente.
+ */
+const calcularCostoArista = (
+  arista,
+  perfil = null
+) => {
+  if (!perfil) {
+    return Number(arista.costo_arista);
+  }
+
+  const distancia = Number(
+    arista.distancia_metros
+  );
+
+  const puntajeRiesgo = Number(
+    arista.puntaje_riesgo ?? 0
+  );
+
+  const riesgoNormalizado = Number.isFinite(puntajeRiesgo)
+    ? limitar(puntajeRiesgo / 100, 0, 1)
+    : 0;
+
+  return distancia * (
+    perfil.peso_distancia +
+    perfil.peso_riesgo * riesgoNormalizado
+  );
+};
+
+/*
+ * Algoritmo Dijkstra.
+ *
+ * Utiliza costo_arista si no hay perfil.
+ * Si existe perfil, calcula el costo de cada arista
+ * usando las ponderaciones de riesgo y distancia.
  */
 const dijkstra = ({
   nodos,
   aristas,
   nodoOrigen,
   nodoDestino,
+  perfil = null,
 }) => {
-  const adyacencia =
-    construirAdyacencia(
-      aristas
-    );
+  const adyacencia = construirAdyacencia(aristas);
 
-  const nodosMap =
-    new Map(
-      nodos.map(
-        (nodo) => [
-          nodo.id,
-          nodo,
-        ]
-      )
-    );
+  const nodosMap = new Map(
+    nodos.map((nodo) => [nodo.id, nodo])
+  );
 
-  const distancias =
-    new Map();
+  const distancias = new Map();
+  const anteriores = new Map();
+  const aristasAnteriores = new Map();
 
-  const anteriores =
-    new Map();
-
-  const aristasAnteriores =
-    new Map();
-
-  for (
-    const idNodo of nodosMap.keys()
-  ) {
-    distancias.set(
-      idNodo,
-      Infinity
-    );
+  for (const idNodo of nodosMap.keys()) {
+    distancias.set(idNodo, Infinity);
   }
 
-  distancias.set(
-    nodoOrigen,
-    0
-  );
+  distancias.set(nodoOrigen, 0);
 
-  const cola =
-    new ColaPrioridad();
+  const cola = new ColaPrioridad();
+  cola.insertar(nodoOrigen, 0);
 
-  cola.insertar(
-    nodoOrigen,
-    0
-  );
-
-  while (
-    cola.size > 0
-  ) {
-    const actual =
-      cola.extraerMinimo();
-
-    const nodoActual =
-      actual.item;
-
-    const distanciaActual =
-      actual.prioridad;
+  while (cola.size > 0) {
+    const actual = cola.extraerMinimo();
+    const nodoActual = actual.item;
+    const distanciaActual = actual.prioridad;
 
     if (
       distanciaActual >
-      distancias.get(
-        nodoActual
-      )
+      distancias.get(nodoActual)
     ) {
       continue;
     }
 
-    /*
-     * Llegamos al destino.
-     */
-    if (
-      nodoActual ===
-      nodoDestino
-    ) {
+    if (nodoActual === nodoDestino) {
       break;
     }
 
     const vecinos =
-      adyacencia.get(
-        nodoActual
-      ) || [];
+      adyacencia.get(nodoActual) || [];
 
-    for (
-      const vecino of vecinos
-    ) {
-      const costo =
-        Number(
-          vecino.arista
-            .costo_arista
-        );
+    for (const vecino of vecinos) {
+      const costo = calcularCostoArista(
+        vecino.arista,
+        perfil
+      );
 
       if (
-        !Number.isFinite(
-          costo
-        ) ||
+        !Number.isFinite(costo) ||
         costo < 0
       ) {
         continue;
       }
 
       const nuevaDistancia =
-        distanciaActual +
-        costo;
+        distanciaActual + costo;
 
       const distanciaAnterior =
-        distancias.get(
-          vecino.nodo
-        );
+        distancias.get(vecino.nodo);
 
-      if (
-        nuevaDistancia <
-        distanciaAnterior
-      ) {
+      if (nuevaDistancia < distanciaAnterior) {
         distancias.set(
           vecino.nodo,
           nuevaDistancia
@@ -422,120 +469,71 @@ const dijkstra = ({
   }
 
   const distanciaDestino =
-    distancias.get(
-      nodoDestino
-    );
+    distancias.get(nodoDestino);
 
-  if (
-    !Number.isFinite(
-      distanciaDestino
-    )
-  ) {
+  if (!Number.isFinite(distanciaDestino)) {
     return null;
   }
 
-  /*
-   * Reconstrucción de la ruta.
-   */
   const nodosRuta = [];
-
   const aristasRuta = [];
 
-  let actual =
-    nodoDestino;
+  let actual = nodoDestino;
 
-  while (
-    actual !== nodoOrigen
-  ) {
-    nodosRuta.unshift(
-      actual
-    );
+  while (actual !== nodoOrigen) {
+    nodosRuta.unshift(actual);
 
     const arista =
-      aristasAnteriores.get(
-        actual
-      );
+      aristasAnteriores.get(actual);
 
     if (!arista) {
       return null;
     }
 
-    aristasRuta.unshift(
-      arista
-    );
+    aristasRuta.unshift(arista);
 
-    actual =
-      anteriores.get(
-        actual
-      );
+    actual = anteriores.get(actual);
 
     if (!actual) {
       return null;
     }
   }
 
-  nodosRuta.unshift(
-    nodoOrigen
-  );
+  nodosRuta.unshift(nodoOrigen);
 
   return {
     nodosRuta,
     aristasRuta,
-    costoTotal:
-      distanciaDestino,
+    costoTotal: distanciaDestino,
   };
 };
 
 /*
- * Construye el resumen final
- * de la ruta.
+ * Construye el resumen de la ruta encontrada.
  */
 const calcularResumenRuta = ({
-  nodos,
   aristasRuta,
   costoTotal,
 }) => {
   let distanciaTotal = 0;
-
   let riesgoPonderado = 0;
 
-  const zonas =
-    new Set();
+  const zonas = new Set();
 
-  for (
-    const arista of aristasRuta
-  ) {
+  for (const arista of aristasRuta) {
     const distancia =
-      Number(
-        arista.distancia_metros
-      ) || 0;
+      Number(arista.distancia_metros) || 0;
 
     const riesgo =
-      Number(
-        arista.puntaje_riesgo
-      ) || 0;
+      Number(arista.puntaje_riesgo) || 0;
 
-    distanciaTotal +=
-      distancia;
+    distanciaTotal += distancia;
+    riesgoPonderado += riesgo * distancia;
 
-    riesgoPonderado +=
-      riesgo * distancia;
-
-    if (
-      Array.isArray(
-        arista.zonas_intersectadas
-      )
-    ) {
-      for (
-        const zona of
-          arista.zonas_intersectadas
-      ) {
-        if (
-          zona?.id_zona
-        ) {
-          zonas.add(
-            zona.id_zona
-          );
+    if (Array.isArray(arista.zonas_intersectadas)) {
+      for (const zona of arista.zonas_intersectadas) {
+        if (zona?.id_zona) {
+          zonas.add(zona.id_zona);
         }
       }
     }
@@ -543,166 +541,89 @@ const calcularResumenRuta = ({
 
   const puntajeRiesgo =
     distanciaTotal > 0
-      ? riesgoPonderado /
-        distanciaTotal
+      ? riesgoPonderado / distanciaTotal
       : 0;
 
-  let nivelRiesgo =
-    "Bajo";
+  let nivelRiesgo = "Bajo";
 
-  if (
-    puntajeRiesgo > 66
-  ) {
-    nivelRiesgo =
-      "Alto";
-  } else if (
-    puntajeRiesgo > 33
-  ) {
-    nivelRiesgo =
-      "Medio";
-  }
-
-  /*
-   * Geometría de la ruta.
-   */
-  const geometria =
-    [];
-
-  for (
-    const nodoId of
-      nodos
-  ) {
-    /*
-     * Se reconstruye desde
-     * el mapa más adelante.
-     */
+  if (puntajeRiesgo > 66) {
+    nivelRiesgo = "Alto";
+  } else if (puntajeRiesgo > 33) {
+    nivelRiesgo = "Medio";
   }
 
   return {
-    distancia_metros:
-      Number(
-        distanciaTotal.toFixed(2)
-      ),
+    distancia_metros: Number(
+      distanciaTotal.toFixed(2)
+    ),
 
-    costo_navegacion:
-      Number(
-        costoTotal.toFixed(4)
-      ),
+    costo_navegacion: Number(
+      costoTotal.toFixed(4)
+    ),
 
-    puntaje_riesgo:
-      Number(
-        puntajeRiesgo.toFixed(2)
-      ),
+    puntaje_riesgo: Number(
+      puntajeRiesgo.toFixed(2)
+    ),
 
-    nivel_riesgo:
-      nivelRiesgo,
+    nivel_riesgo: nivelRiesgo,
 
-    cantidad_segmentos:
-      aristasRuta.length,
+    cantidad_segmentos: aristasRuta.length,
 
-    zonas_riesgo_afectadas:
-      Array.from(zonas),
+    zonas_riesgo_afectadas: Array.from(zonas),
 
-    geometria,
+    geometria: [],
   };
 };
 
 /*
- * Construye las coordenadas
- * de la ruta a partir de los nodos.
+ * Construye las coordenadas de la ruta.
  */
 const construirGeometriaRuta = (
   nodosMap,
   nodosRuta
 ) => {
   return nodosRuta
-    .map(
-      (idNodo) =>
-        nodosMap.get(idNodo)
-    )
+    .map((idNodo) => nodosMap.get(idNodo))
     .filter(Boolean)
-    .map(
-      (nodo) => [
-        Number(
-          nodo.latitud
-        ),
-        Number(
-          nodo.longitud
-        ),
-      ]
-    );
+    .map((nodo) => [
+      Number(nodo.latitud),
+      Number(nodo.longitud),
+    ]);
 };
 
 /*
- * Calcula una ruta segura
- * mediante Dijkstra.
+ * Calcula una ruta para un perfil específico.
+ *
+ * grafoPrecalculado permite reutilizar un mismo
+ * grafo cuando se generan varias alternativas.
  */
 const calcularRutaSegura = async ({
   comuna,
   origen,
   destino,
   rangoHorario,
+  perfilRuta = null,
+  grafoPrecalculado = null,
 }) => {
-  if (
-    !origen ||
-    !Number.isFinite(
-      Number(
-        origen.latitud
-      )
-    ) ||
-    !Number.isFinite(
-      Number(
-        origen.longitud
-      )
-    )
-  ) {
+  const perfil = perfilRuta
+    ? PERFILES_RUTA[perfilRuta]
+    : null;
+
+  if (perfilRuta && !perfil) {
     throw new Error(
-      "El origen debe contener latitud y longitud válidas."
+      `Perfil de ruta no válido: ${perfilRuta}`
     );
   }
 
-  if (
-    !destino ||
-    !Number.isFinite(
-      Number(
-        destino.latitud
-      )
-    ) ||
-    !Number.isFinite(
-      Number(
-        destino.longitud
-      )
-    )
-  ) {
-    throw new Error(
-      "El destino debe contener latitud y longitud válidas."
-    );
-  }
-
-  const latOrigen =
-    Number(
-      origen.latitud
-    );
-
-  const lonOrigen =
-    Number(
-      origen.longitud
-    );
-
-  const latDestino =
-    Number(
-      destino.latitud
-    );
-
-  const lonDestino =
-    Number(
-      destino.longitud
-    );
-
-  const bboxRuta = construirBboxRuta(
-    { latitud: latOrigen, longitud: lonOrigen },
-    { latitud: latDestino, longitud: lonDestino },
-  );
+  const {
+    latOrigen,
+    lonOrigen,
+    latDestino,
+    lonDestino,
+  } = normalizarCoordenadasRuta({
+    origen,
+    destino,
+  });
 
   console.log(
     `RUTA - Calculando ${comuna || "área del mapa"}`
@@ -716,38 +637,31 @@ const calcularRutaSegura = async ({
     `RUTA - Destino: ${latDestino}, ${lonDestino}`
   );
 
-  /*
-   * Construimos el grafo ponderado.
-   */
-  const grafo =
-    await obtenerGrafoPeatonal({
-      comuna,
-      rangoHorario,
-      bbox: bboxRuta,
-      soloSupabase: true,
-    });
-
-  if (
-    !grafo?.nodos ||
-    !grafo?.aristas
-  ) {
-    throw new Error(
-      "El grafo peatonal no contiene nodos o aristas."
+  if (perfilRuta) {
+    console.log(
+      `RUTA - Perfil: ${perfil.nombre}`
     );
   }
 
-  if (
-    grafo.nodos.length === 0 ||
-    grafo.aristas.length === 0
-  ) {
-    throw new Error(
-      "No existe una red peatonal disponible para la comuna."
-    );
-  }
+  const grafo = validarGrafoPeatonal(
+    grafoPrecalculado ||
+      await obtenerGrafoRuta({
+        comuna,
 
-  /*
-   * Buscar nodos más cercanos.
-   */
+        origen: {
+          latitud: latOrigen,
+          longitud: lonOrigen,
+        },
+
+        destino: {
+          latitud: latDestino,
+          longitud: lonDestino,
+        },
+
+        rangoHorario,
+      })
+  );
+
   const origenCercano =
     obtenerNodoMasCercanoEnGrafo(
       grafo.nodos,
@@ -770,86 +684,48 @@ const calcularRutaSegura = async ({
     `RUTA - Nodo destino: ${destinoCercano.nodo.id} (${destinoCercano.distancia_metros} m)`
   );
 
-  /*
-   * Ejecutar Dijkstra.
-   */
-  const resultadoDijkstra =
-    dijkstra({
-      nodos:
-        grafo.nodos,
+  const resultadoDijkstra = dijkstra({
+    nodos: grafo.nodos,
+    aristas: grafo.aristas,
 
-      aristas:
-        grafo.aristas,
+    nodoOrigen: origenCercano.nodo.id,
+    nodoDestino: destinoCercano.nodo.id,
 
-      nodoOrigen:
-        origenCercano.nodo.id,
+    perfil,
+  });
 
-      nodoDestino:
-        destinoCercano.nodo.id,
-    });
-
-  /*
-   * No existe conexión.
-   */
-  if (
-    !resultadoDijkstra
-  ) {
+  if (!resultadoDijkstra) {
     return {
-      encontrada:
-        false,
+      encontrada: false,
 
       mensaje:
         "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.",
 
       origen: {
-        latitud:
-          latOrigen,
-
-        longitud:
-          lonOrigen,
+        latitud: latOrigen,
+        longitud: lonOrigen,
       },
 
       destino: {
-        latitud:
-          latDestino,
-
-        longitud:
-          lonDestino,
+        latitud: latDestino,
+        longitud: lonDestino,
       },
     };
   }
 
-  /*
-   * Mapa de nodos para generar
-   * la geometría final.
-   */
-  const nodosMap =
-    new Map(
-      grafo.nodos.map(
-        (nodo) => [
-          nodo.id,
-          nodo,
-        ]
-      )
-    );
+  const nodosMap = new Map(
+    grafo.nodos.map((nodo) => [nodo.id, nodo])
+  );
 
-  const resumen =
-    calcularResumenRuta({
-      nodos:
-        grafo.nodos,
+  const resumen = calcularResumenRuta({
+    aristasRuta: resultadoDijkstra.aristasRuta,
+    costoTotal: resultadoDijkstra.costoTotal,
+  });
 
-      aristasRuta:
-        resultadoDijkstra.aristasRuta,
-
-      costoTotal:
-        resultadoDijkstra.costoTotal,
-    });
-
-  resumen.geometria =
-    construirGeometriaRuta(
-      nodosMap,
-      resultadoDijkstra.nodosRuta
-    );
+  resumen.geometria = construirGeometriaRuta(
+    nodosMap,
+    resultadoDijkstra.nodosRuta
+  );
 
   console.log(
     `RUTA - Encontrada: ${resultadoDijkstra.aristasRuta.length} segmentos`
@@ -868,32 +744,23 @@ const calcularRutaSegura = async ({
   );
 
   return {
-    encontrada:
-      true,
+    encontrada: true,
 
     origen: {
-      latitud:
-        latOrigen,
+      latitud: latOrigen,
+      longitud: lonOrigen,
 
-      longitud:
-        lonOrigen,
-
-      nodo_mas_cercano:
-        origenCercano.nodo.id,
+      nodo_mas_cercano: origenCercano.nodo.id,
 
       distancia_al_nodo_metros:
         origenCercano.distancia_metros,
     },
 
     destino: {
-      latitud:
-        latDestino,
+      latitud: latDestino,
+      longitud: lonDestino,
 
-      longitud:
-        lonDestino,
-
-      nodo_mas_cercano:
-        destinoCercano.nodo.id,
+      nodo_mas_cercano: destinoCercano.nodo.id,
 
       distancia_al_nodo_metros:
         destinoCercano.distancia_metros,
@@ -901,56 +768,171 @@ const calcularRutaSegura = async ({
 
     ...resumen,
 
-    nodos_ruta:
-      resultadoDijkstra.nodosRuta,
+    ...(perfilRuta
+      ? {
+          perfil_ruta: perfilRuta,
+          nombre_perfil_ruta: perfil.nombre,
+        }
+      : {}),
 
-    segmentos:
-      resultadoDijkstra.aristasRuta.map(
-        (arista) => ({
-          id_osm:
-            arista.id_osm,
+    nodos_ruta: resultadoDijkstra.nodosRuta,
 
-          nodo_origen:
-            arista.nodo_origen,
+    segmentos: resultadoDijkstra.aristasRuta.map(
+      (arista) => ({
+        id_osm: arista.id_osm,
 
-          nodo_destino:
-            arista.nodo_destino,
+        nodo_origen: arista.nodo_origen,
+        nodo_destino: arista.nodo_destino,
 
-          distancia_metros:
-            arista.distancia_metros,
+        distancia_metros: arista.distancia_metros,
 
-          puntaje_riesgo:
-            arista.puntaje_riesgo,
+        puntaje_riesgo: arista.puntaje_riesgo,
+        nivel_riesgo: arista.nivel_riesgo,
 
-          nivel_riesgo:
-            arista.nivel_riesgo,
+        costo_riesgo: arista.costo_riesgo,
+        costo_distancia: arista.costo_distancia,
 
-          costo_riesgo:
-            arista.costo_riesgo,
+        costo_arista: Number(
+          calcularCostoArista(
+            arista,
+            perfil
+          ).toFixed(4)
+        ),
 
-          costo_distancia:
-            arista.costo_distancia,
+        zonas_intersectadas:
+          arista.zonas_intersectadas,
 
-          costo_arista:
-            arista.costo_arista,
+        nombre: arista.nombre,
+        tipo: arista.tipo,
 
-          zonas_intersectadas:
-            arista.zonas_intersectadas,
+        categoria_peatonal:
+          arista.categoria_peatonal,
+      })
+    ),
+  };
+};
 
-          nombre:
-            arista.nombre,
+/*
+ * Genera las alternativas de navegación:
+ * 1. Menor riesgo.
+ * 2. Equilibrada.
+ * 3. Más rápida.
+ *
+ * El grafo se obtiene una sola vez y se reutiliza
+ * para ejecutar Dijkstra con cada perfil.
+ *
+ * Los recorridos duplicados se eliminan.
+ * Si no hay tres recorridos diferentes, se devuelven
+ * únicamente las alternativas disponibles.
+ */
+const calcularRutasAlternativas = async ({
+  comuna,
+  origen,
+  destino,
+  rangoHorario,
+}) => {
+  const {
+    latOrigen,
+    lonOrigen,
+    latDestino,
+    lonDestino,
+  } = normalizarCoordenadasRuta({
+    origen,
+    destino,
+  });
 
-          tipo:
-            arista.tipo,
+  const origenNormalizado = {
+    latitud: latOrigen,
+    longitud: lonOrigen,
+  };
 
-          categoria_peatonal:
-            arista.categoria_peatonal,
-        })
-      ),
+  const destinoNormalizado = {
+    latitud: latDestino,
+    longitud: lonDestino,
+  };
+
+  const grafo = await obtenerGrafoRuta({
+    comuna,
+    origen: origenNormalizado,
+    destino: destinoNormalizado,
+    rangoHorario,
+  });
+
+  const rutasUnicas = [];
+  const recorridosVistos = new Set();
+
+  for (const perfilRuta of Object.keys(PERFILES_RUTA)) {
+    const resultado = await calcularRutaSegura({
+      comuna,
+
+      origen: origenNormalizado,
+      destino: destinoNormalizado,
+
+      rangoHorario,
+      perfilRuta,
+
+      grafoPrecalculado: grafo,
+    });
+
+    if (
+      !resultado.encontrada ||
+      !Array.isArray(resultado.nodos_ruta)
+    ) {
+      continue;
+    }
+
+    const identificadorRecorrido =
+      resultado.nodos_ruta.join("->");
+
+    if (
+      recorridosVistos.has(
+        identificadorRecorrido
+      )
+    ) {
+      console.log(
+        `RUTA - Alternativa duplicada descartada: ${perfilRuta}`
+      );
+
+      continue;
+    }
+
+    recorridosVistos.add(
+      identificadorRecorrido
+    );
+
+    rutasUnicas.push(resultado);
+  }
+
+  const cantidadPerfiles =
+    Object.keys(PERFILES_RUTA).length;
+
+  let mensaje = null;
+
+  if (rutasUnicas.length === 0) {
+    mensaje =
+      "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.";
+  } else if (rutasUnicas.length < cantidadPerfiles) {
+    mensaje =
+      `Solo fue posible generar ${rutasUnicas.length} rutas peatonales diferentes de ${cantidadPerfiles} posibles.`;
+  }
+
+  console.log(
+    `RUTA - Alternativas diferentes: ${rutasUnicas.length}/${cantidadPerfiles}`
+  );
+
+  return {
+    encontrada: rutasUnicas.length > 0,
+
+    cantidad_rutas: rutasUnicas.length,
+
+    rutas: rutasUnicas,
+
+    ...(mensaje ? { mensaje } : {}),
   };
 };
 
 module.exports = {
   calcularRutaSegura,
+  calcularRutasAlternativas,
   construirBboxRuta,
 };
