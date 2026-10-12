@@ -858,11 +858,14 @@ export default function MapaRiesgo() {
       rutaSeleccionada === null ||
       alternativa.perfil_ruta === rutaSeleccionada,
   );
+  const clavePuntosRuta = origen && destino
+    ? `${origen.latitud},${origen.longitud}:${destino.latitud},${destino.longitud}`
+    : "sin-puntos";
 
   return (
     <View style={styles.container}>
       <MapView
-        key={`map-zonas-${mostrarZonas}-ruta-${rutaSeleccionada ?? "todas"}`}
+        key={`map-zonas-${mostrarZonas}-ruta-${rutaSeleccionada ?? "todas"}-${clavePuntosRuta}`}
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         accessibilityLabel="Mapa de RutaSegura, centrado en Viña del Mar"
@@ -920,7 +923,7 @@ export default function MapaRiesgo() {
 
             return (
               <Polyline
-                key={`${alternativa.perfil_ruta}-${rutaSeleccionada ?? "todas"}`}
+                key={`${clavePuntosRuta}-${alternativa.perfil_ruta}-${rutaSeleccionada ?? "todas"}`}
                 coordinates={geometria.map(([latitude, longitude]) => ({
                   latitude,
                   longitude,
