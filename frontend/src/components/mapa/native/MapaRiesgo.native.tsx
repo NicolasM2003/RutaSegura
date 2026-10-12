@@ -9,7 +9,11 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
-import MapView, { PROVIDER_GOOGLE, Polyline, type Region } from "react-native-maps";
+import MapView, {
+  PROVIDER_GOOGLE,
+  Polyline,
+  type Region,
+} from "react-native-maps";
 import ControlesMapa, { RANGOS_HORARIOS } from "./ControlesMapa.native";
 import {
   CapaDelitos,
@@ -71,7 +75,6 @@ function normalizarGeometria(value: unknown): Array<[number, number]> {
   return value.flatMap((point): Array<[number, number]> => {
     if (!Array.isArray(point) || point.length < 2) return [];
 
-    // El backend entrega [latitud, longitud].
     const lat = Number(point[0]);
     const lon = Number(point[1]);
 
@@ -118,7 +121,6 @@ function bboxVisible(region: Region) {
   const norte = Math.min(90, region.latitude + region.latitudeDelta / 2);
   const este = Math.min(180, region.longitude + region.longitudeDelta / 2);
 
-  // El endpoint existente espera: sur,oeste,norte,este.
   return [sur, oeste, norte, este]
     .map((value) => value.toFixed(6))
     .join(",");
@@ -279,6 +281,7 @@ export default function MapaRiesgo() {
   >(null);
 
   const [ruta, setRuta] = useState<ResultadoRuta | null>(null);
+  const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
 
@@ -309,6 +312,7 @@ export default function MapaRiesgo() {
     setOrigen(null);
     setDestino(null);
     setRuta(null);
+    setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion(null);
     setSeleccion(null);
@@ -320,6 +324,7 @@ export default function MapaRiesgo() {
     cancelarRutaPendiente();
     setDestino(null);
     setRuta(null);
+    setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion("origen");
     setSeleccion(null);
@@ -333,6 +338,7 @@ export default function MapaRiesgo() {
     cancelarRutaPendiente();
     setDestino(null);
     setRuta(null);
+    setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion("destino");
     setSeleccion(null);
@@ -396,6 +402,7 @@ export default function MapaRiesgo() {
 
       setZonaDestinoDetectada(undefined);
       setRuta(null);
+      setRutaSeleccionada(null);
       setErrorRuta(null);
       setModoSeleccion("destino");
 
@@ -474,6 +481,7 @@ export default function MapaRiesgo() {
 
       setSeleccion(null);
       setRuta(null);
+      setRutaSeleccionada(null);
       setErrorRuta(null);
 
       if (tipo === "origen") {
@@ -523,6 +531,7 @@ export default function MapaRiesgo() {
 
       setSeleccion(null);
       setRuta(null);
+      setRutaSeleccionada(null);
       setErrorRuta(null);
 
       if (modoSeleccion === "origen") {
@@ -548,6 +557,7 @@ export default function MapaRiesgo() {
 
     if (!origen || !destino) {
       setRuta(null);
+      setRutaSeleccionada(null);
       setErrorRuta(null);
       setCargandoRuta(false);
       return;
@@ -557,6 +567,7 @@ export default function MapaRiesgo() {
     rutaAbort.current = controller;
 
     setRuta(null);
+    setRutaSeleccionada(null);
 
     const params = new URLSearchParams({
       origen_lat: String(origen.latitud),
@@ -637,13 +648,18 @@ export default function MapaRiesgo() {
   useEffect(() => {
     if (ruta?.encontrada === false) return;
 
-    const coordenadas: Array<[number, number]> = (
-      ruta?.rutas ?? []
-    ).flatMap((alternativa) =>
-      Array.isArray(alternativa.geometria)
-        ? (alternativa.geometria as Array<[number, number]>)
-        : [],
+    const alternativasParaEncuadrar = (ruta?.rutas ?? []).filter(
+      (alternativa) =>
+        rutaSeleccionada === null ||
+        alternativa.perfil_ruta === rutaSeleccionada,
     );
+
+    const coordenadas: Array<[number, number]> =
+      alternativasParaEncuadrar.flatMap((alternativa) =>
+        Array.isArray(alternativa.geometria)
+          ? (alternativa.geometria as Array<[number, number]>)
+          : [],
+      );
 
     if (coordenadas.length < 2) return;
 
@@ -662,7 +678,7 @@ export default function MapaRiesgo() {
         animated: true,
       },
     );
-  }, [ruta]);
+  }, [ruta, rutaSeleccionada]);
 
   useEffect(() => {
     if (!RANGOS_HORARIOS.includes(horario)) return;
@@ -773,7 +789,6 @@ export default function MapaRiesgo() {
     redAbort.current = controller;
     redConsultaKey.current = consultaKey;
 
-    // Descarta los segmentos del viewport anterior antes de solicitar el nuevo.
     setSegmentos([]);
     setCargandoRed(true);
     setError(null);
@@ -838,10 +853,16 @@ export default function MapaRiesgo() {
         )
       : [];
 
+  const rutasParaDibujar = (ruta?.rutas ?? []).filter(
+    (alternativa) =>
+      rutaSeleccionada === null ||
+      alternativa.perfil_ruta === rutaSeleccionada,
+  );
+
   return (
     <View style={styles.container}>
       <MapView
-        key={`map-zonas-${mostrarZonas}`}
+        key={`map-zonas-${mostrarZonas}-ruta-${rutaSeleccionada ?? "todas"}`}
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         accessibilityLabel="Mapa de RutaSegura, centrado en Viña del Mar"
@@ -888,25 +909,27 @@ export default function MapaRiesgo() {
           />
         )}
 
-        {[...(ruta?.rutas ?? [])].reverse().map((alternativa) => {
-          const geometria = Array.isArray(alternativa.geometria)
-            ? (alternativa.geometria as Array<[number, number]>)
-            : [];
+        {[...rutasParaDibujar]
+          .reverse()
+          .map((alternativa) => {
+            const geometria = Array.isArray(alternativa.geometria)
+              ? (alternativa.geometria as Array<[number, number]>)
+              : [];
 
-          if (geometria.length < 2) return null;
+            if (geometria.length < 2) return null;
 
-          return (
-            <Polyline
-              key={alternativa.perfil_ruta}
-              coordinates={geometria.map(([latitude, longitude]) => ({
-                latitude,
-                longitude,
-              }))}
-              strokeColor={colorPerfilRuta(alternativa.perfil_ruta)}
-              strokeWidth={6}
-            />
-          );
-        })}
+            return (
+              <Polyline
+                key={`${alternativa.perfil_ruta}-${rutaSeleccionada ?? "todas"}`}
+                coordinates={geometria.map(([latitude, longitude]) => ({
+                  latitude,
+                  longitude,
+                }))}
+                strokeColor={colorPerfilRuta(alternativa.perfil_ruta)}
+                strokeWidth={6}
+              />
+            );
+          })}
 
         <CapaPuntosRuta
           origen={origen}
@@ -977,7 +1000,8 @@ export default function MapaRiesgo() {
 
       {(zonaOrigenDetectada || zonaDestinoDetectada) &&
         !seleccion &&
-        !cargandoRuta && (
+        !cargandoRuta &&
+        !(ruta?.rutas && ruta.rutas.length > 0) && (
           <View
             style={[
               styles.zoneAssociationCard,
@@ -1048,7 +1072,7 @@ export default function MapaRiesgo() {
                   >
                     Se encontraron{" "}
                     {ruta?.cantidad_rutas ?? ruta?.rutas?.length ?? 0}{" "}
-                    alternativas.
+                    alternativas. Selecciona una para mostrar solo esa ruta.
                   </Text>
                 )}
 
@@ -1056,20 +1080,39 @@ export default function MapaRiesgo() {
                 !errorRuta &&
                 (ruta?.rutas ?? []).map((alternativa) => {
                   const color = colorPerfilRuta(alternativa.perfil_ruta);
+                  const seleccionada =
+                    rutaSeleccionada === alternativa.perfil_ruta;
 
                   return (
-                    <View
+                    <Pressable
                       key={alternativa.perfil_ruta}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Seleccionar ruta ${nombrePerfilRuta(alternativa)}`}
+                      accessibilityState={{ selected: seleccionada }}
+                      onPress={() =>
+                          setRutaSeleccionada((actual) =>
+                            actual === alternativa.perfil_ruta
+                              ? null
+                              : alternativa.perfil_ruta,
+                          )
+                        }
                       style={[
                         styles.alternativeCard,
                         { borderLeftColor: color },
+                        seleccionada && styles.alternativeCardSelected,
                       ]}
                     >
-                      <Text
-                        style={[styles.alternativeTitle, { color }]}
-                      >
-                        {nombrePerfilRuta(alternativa)}
-                      </Text>
+                      <View style={styles.alternativeHeader}>
+                        <Text style={[styles.alternativeTitle, { color }]}>
+                          {nombrePerfilRuta(alternativa)}
+                        </Text>
+
+                        {seleccionada && (
+                          <Text style={[styles.selectedRouteLabel, { color }]}>
+                            ✓ Seleccionada
+                          </Text>
+                        )}
+                      </View>
 
                       <Text style={styles.routeLine}>
                         Distancia:{" "}
@@ -1098,7 +1141,7 @@ export default function MapaRiesgo() {
                           ? alternativa.puntaje_riesgo.toFixed(2)
                           : "No disponible"}
                       </Text>
-                    </View>
+                    </Pressable>
                   );
                 })}
             </ScrollView>
@@ -1197,6 +1240,26 @@ const styles = StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 7,
     marginTop: 7,
+  },
+  alternativeCardSelected: {
+    backgroundColor: "#f0fdf4",
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: "#bbf7d0",
+    borderRightColor: "#bbf7d0",
+    borderBottomColor: "#bbf7d0",
+  },
+  alternativeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  selectedRouteLabel: {
+    fontSize: 11,
+    fontWeight: "700",
   },
   alternativeTitle: {
     fontSize: 14,
