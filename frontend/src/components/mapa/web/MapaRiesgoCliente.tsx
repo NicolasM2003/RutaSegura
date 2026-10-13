@@ -3,7 +3,6 @@ import {
   useRef,
   useState,
 } from "react";
-
 import {
   MapContainer,
   TileLayer,
@@ -13,7 +12,6 @@ import {
   Tooltip,
   useMap,
 } from "react-leaflet";
-
 import {
   BotonDelitos,
   BotonRedPeatonal,
@@ -22,7 +20,6 @@ import {
   ControlZoom,
   EstadoRedPeatonal,
 } from "./ControlesMapa.web";
-
 import {
   CapaDelitos,
   CapaRedPeatonal,
@@ -30,92 +27,58 @@ import {
   LeyendaMapa,
 } from "./CapasMapa.web";
 import UbicacionesMapaWeb from "./UbicacionesMapa.web";
-import { buscarDirecciones, type DestinoRuta, type ResultadoDireccion } from "../direccion";
+import {
+  buscarDirecciones,
+  type DestinoRuta,
+  type ResultadoDireccion,
+} from "../direccion";
 
-/**
- * Escucha los movimientos y cambios de zoom del mapa
- * y notifica el BBOX visible.
- */
 function EscuchaBbox({
   onBboxChange,
 }: {
-  onBboxChange: (
-    bbox: string
-  ) => void;
+  onBboxChange: (bbox: string) => void;
 }) {
-  const timeoutRef =
-    useRef<ReturnType<
-      typeof setTimeout
-    > | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useMapEvents({
     moveend: (evento) => {
-      const bounds =
-        evento.target.getBounds();
-
-      const norte =
-        bounds.getNorth();
-      const sur =
-        bounds.getSouth();
-      const este =
-        bounds.getEast();
-      const oeste =
-        bounds.getWest();
-
-      const nuevoBbox =
-        `${sur},${oeste},${norte},${este}`;
+      const bounds = evento.target.getBounds();
+      const norte = bounds.getNorth();
+      const sur = bounds.getSouth();
+      const este = bounds.getEast();
+      const oeste = bounds.getWest();
+      const nuevoBbox = `${sur},${oeste},${norte},${este}`;
 
       if (timeoutRef.current) {
-        clearTimeout(
-          timeoutRef.current
-        );
+        clearTimeout(timeoutRef.current);
       }
 
-      timeoutRef.current =
-        setTimeout(() => {
-          onBboxChange(
-            nuevoBbox
-          );
-        }, 400);
+      timeoutRef.current = setTimeout(() => {
+        onBboxChange(nuevoBbox);
+      }, 400);
     },
-
     zoomend: (evento) => {
-      const bounds =
-        evento.target.getBounds();
-
-      const norte =
-        bounds.getNorth();
-      const sur =
-        bounds.getSouth();
-      const este =
-        bounds.getEast();
-      const oeste =
-        bounds.getWest();
-
-      const nuevoBbox =
-        `${sur},${oeste},${norte},${este}`;
+      const bounds = evento.target.getBounds();
+      const norte = bounds.getNorth();
+      const sur = bounds.getSouth();
+      const este = bounds.getEast();
+      const oeste = bounds.getWest();
+      const nuevoBbox = `${sur},${oeste},${norte},${este}`;
 
       if (timeoutRef.current) {
-        clearTimeout(
-          timeoutRef.current
-        );
+        clearTimeout(timeoutRef.current);
       }
 
-      timeoutRef.current =
-        setTimeout(() => {
-          onBboxChange(
-            nuevoBbox
-          );
-        }, 400);
+      timeoutRef.current = setTimeout(() => {
+        onBboxChange(nuevoBbox);
+      }, 400);
     },
   });
 
   useEffect(() => {
     return () => {
       if (timeoutRef.current) {
-        clearTimeout(
-          timeoutRef.current
-        );
+        clearTimeout(timeoutRef.current);
       }
     };
   }, []);
@@ -128,9 +91,10 @@ export function SeleccionarPuntos({
   onSeleccionarPunto,
 }: {
   modo: DestinoRuta | null;
-  onSeleccionarPunto: (tipo: DestinoRuta,
+  onSeleccionarPunto: (
+    tipo: DestinoRuta,
     latitud: number,
-    longitud: number
+    longitud: number,
   ) => void;
 }) {
   useMapEvents({
@@ -143,11 +107,23 @@ export function SeleccionarPuntos({
   return null;
 }
 
-function CentrarPunto({ punto }: { punto: { latitud: number; longitud: number } | null }) {
+function CentrarPunto({
+  punto,
+}: {
+  punto: { latitud: number; longitud: number } | null;
+}) {
   const map = useMap();
+
   useEffect(() => {
-    if (punto) map.flyTo([punto.latitud, punto.longitud], Math.max(map.getZoom(), 15), { duration: 0.6 });
+    if (punto) {
+      map.flyTo(
+        [punto.latitud, punto.longitud],
+        Math.max(map.getZoom(), 15),
+        { duration: 0.6 },
+      );
+    }
   }, [map, punto]);
+
   return null;
 }
 
@@ -159,13 +135,13 @@ function puntosCompletos(
   destino: {
     latitud: number;
     longitud: number;
-  } | null
+  } | null,
 ) {
   return origen !== null && destino !== null;
 }
 
 export function normalizarGeometriaRuta(
-  geometria: unknown
+  geometria: unknown,
 ): [number, number][] {
   if (!Array.isArray(geometria)) {
     return [];
@@ -174,17 +150,15 @@ export function normalizarGeometriaRuta(
   return geometria
     .filter(
       (punto): punto is [unknown, unknown] =>
-        Array.isArray(punto) &&
-        punto.length >= 2
+        Array.isArray(punto) && punto.length >= 2,
     )
-    .map((punto) => [
-      Number(punto[0]),
-      Number(punto[1]),
-    ] as [number, number])
+    .map(
+      (punto) =>
+        [Number(punto[0]), Number(punto[1])] as [number, number],
+    )
     .filter(
       ([latitud, longitud]) =>
-        Number.isFinite(latitud) &&
-        Number.isFinite(longitud)
+        Number.isFinite(latitud) && Number.isFinite(longitud),
     );
 }
 
@@ -197,56 +171,18 @@ export function formatearDistancia(metros: number) {
 }
 
 export default function MapaRiesgoClient() {
-  const [zonas, setZonas] =
-    useState<any[]>([]);
-
-  const [delitos, setDelitos] =
-    useState<any[]>([]);
-
-  const [redPeatonal, setRedPeatonal] =
-    useState<any[]>([]);
-
-  const [
-    comunaRedPeatonal,
-    setComunaRedPeatonal,
-  ] = useState(
-    "Viña del Mar"
-  );
-
-  const [
-    mostrarRedPeatonal,
-    setMostrarRedPeatonal,
-  ] = useState(true);
-
-  const [
-    mostrarZonasRiesgo,
-    setMostrarZonasRiesgo,
-  ] = useState(true);
-
-  const [
-    mostrarDelitos,
-    setMostrarDelitos,
-  ] = useState(false);
-
-  const [
-    cargandoRedPeatonal,
-    setCargandoRedPeatonal,
-  ] = useState(false);
-
-  const [
-    errorRedPeatonal,
-    setErrorRedPeatonal,
-  ] = useState(false);
-
-  const [
-    bbox,
-    setBbox,
-  ] = useState<string | null>(
-    null
-  );
-
-  const [zoom, setZoom] =
-    useState(13);
+  const [zonas, setZonas] = useState<any[]>([]);
+  const [delitos, setDelitos] = useState<any[]>([]);
+  const [redPeatonal, setRedPeatonal] = useState<any[]>([]);
+  const [comunaRedPeatonal, setComunaRedPeatonal] =
+    useState("Viña del Mar");
+  const [mostrarRedPeatonal, setMostrarRedPeatonal] = useState(true);
+  const [mostrarZonasRiesgo, setMostrarZonasRiesgo] = useState(true);
+  const [mostrarDelitos, setMostrarDelitos] = useState(false);
+  const [cargandoRedPeatonal, setCargandoRedPeatonal] = useState(false);
+  const [errorRedPeatonal, setErrorRedPeatonal] = useState(false);
+  const [bbox, setBbox] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(13);
 
   const [origen, setOrigen] = useState<{
     latitud: number;
@@ -257,17 +193,27 @@ export default function MapaRiesgoClient() {
     latitud: number;
     longitud: number;
   } | null>(null);
-  const [modoSeleccion, setModoSeleccion] = useState<DestinoRuta | null>("origen");
-  const [ubicacionActual, setUbicacionActual] = useState<{ latitud: number; longitud: number } | null>(null);
-  const [puntoParaCentrar, setPuntoParaCentrar] = useState<{ latitud: number; longitud: number } | null>(null);
+
+  const [modoSeleccion, setModoSeleccion] =
+    useState<DestinoRuta | null>("origen");
+
+  const [ubicacionActual, setUbicacionActual] = useState<{
+    latitud: number;
+    longitud: number;
+  } | null>(null);
+
+  const [puntoParaCentrar, setPuntoParaCentrar] = useState<{
+    latitud: number;
+    longitud: number;
+  } | null>(null);
+
   const [buscandoUbicacion, setBuscandoUbicacion] = useState(false);
   const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
+  const [ruta, setRuta] = useState<any>(null);
+  const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
+  const [cargandoRuta, setCargandoRuta] = useState(false);
+  const [errorRuta, setErrorRuta] = useState<string | null>(null);
 
-    const [ruta, setRuta] = useState<any>(null);
-
-    const [cargandoRuta, setCargandoRuta] = useState(false);
-
-    const [errorRuta, setErrorRuta] = useState<string | null>(null);
   const rutaAbortRef = useRef<AbortController | null>(null);
   const rutaIdRef = useRef(0);
 
@@ -278,173 +224,202 @@ export default function MapaRiesgoClient() {
     setCargandoRuta(false);
   };
 
-    const geometriaRuta = normalizarGeometriaRuta(ruta?.geometria);
-    console.log(
-      "Geometría ruta normalizada:",
-      geometriaRuta
-    );
+  const rutasAlternativas = Array.isArray(ruta?.rutas)
+    ? ruta.rutas.map((alternativa: any) => ({
+        ...alternativa,
+        geometria: normalizarGeometriaRuta(alternativa.geometria),
+      }))
+    : [];
+
+  const rutasParaDibujar = rutaSeleccionada
+    ? rutasAlternativas.filter(
+        (alternativa: any) =>
+          alternativa.perfil_ruta === rutaSeleccionada,
+      )
+    : rutasAlternativas;
 
   const reiniciarPuntos = () => {
     cancelarRutaPendiente();
     setOrigen(null);
     setDestino(null);
     setRuta(null);
+    setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion("origen");
   };
 
-  const seleccionarPunto = (tipo: DestinoRuta, latitud: number, longitud: number): boolean => {
+  const seleccionarPunto = (
+    tipo: DestinoRuta,
+    latitud: number,
+    longitud: number,
+  ): boolean => {
     const punto = { latitud, longitud };
+
     if (tipo === "origen") {
-      setOrigen(punto); setDestino(null); setModoSeleccion("destino");
+      setOrigen(punto);
+      setDestino(null);
+      setModoSeleccion("destino");
     } else {
-      if (!origen) { setEstadoUbicacion("Primero establece un origen."); setModoSeleccion("origen"); return false; }
-      setDestino(punto); setModoSeleccion(null);
+      if (!origen) {
+        setEstadoUbicacion("Primero establece un origen.");
+        setModoSeleccion("origen");
+        return false;
+      }
+
+      setDestino(punto);
+      setModoSeleccion(null);
     }
+
     cancelarRutaPendiente();
     setPuntoParaCentrar(punto);
-    setRuta(null); setErrorRuta(null); setEstadoUbicacion(null);
+    setRuta(null);
+    setRutaSeleccionada(null);
+    setErrorRuta(null);
+    setEstadoUbicacion(null);
+
     return true;
   };
 
   const usarMiUbicacion = () => {
-    if (!navigator.geolocation) { setEstadoUbicacion("Este navegador no ofrece geolocalización. Puedes seleccionar el punto en el mapa o buscar una dirección."); return; }
-    setBuscandoUbicacion(true); setEstadoUbicacion(null);
-    navigator.geolocation.getCurrentPosition((posicion) => {
-      const punto = { latitud: posicion.coords.latitude, longitud: posicion.coords.longitude };
-      setUbicacionActual(punto); seleccionarPunto("origen", punto.latitud, punto.longitud);
-      setEstadoUbicacion("Ubicación actual establecida como origen."); setBuscandoUbicacion(false);
-    }, (reason) => {
-      setEstadoUbicacion(reason.code === reason.PERMISSION_DENIED ? "Permiso de ubicación denegado. Puedes elegir un punto en el mapa o buscar una dirección." : "No se pudo obtener la ubicación. Puedes elegir un punto en el mapa o buscar una dirección.");
-      setBuscandoUbicacion(false);
-    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+    if (!navigator.geolocation) {
+      setEstadoUbicacion(
+        "Este navegador no ofrece geolocalización. Puedes seleccionar el punto en el mapa o buscar una dirección.",
+      );
+      return;
+    }
+
+    setBuscandoUbicacion(true);
+    setEstadoUbicacion(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (posicion) => {
+        const punto = {
+          latitud: posicion.coords.latitude,
+          longitud: posicion.coords.longitude,
+        };
+
+        setUbicacionActual(punto);
+        seleccionarPunto("origen", punto.latitud, punto.longitud);
+        setEstadoUbicacion("Ubicación actual establecida como origen.");
+        setBuscandoUbicacion(false);
+      },
+      (reason) => {
+        setEstadoUbicacion(
+          reason.code === reason.PERMISSION_DENIED
+            ? "Permiso de ubicación denegado. Puedes elegir un punto en el mapa o buscar una dirección."
+            : "No se pudo obtener la ubicación. Puedes elegir un punto en el mapa o buscar una dirección.",
+        );
+        setBuscandoUbicacion(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 30000,
+      },
+    );
   };
 
   const buscarDireccion = (consulta: string, tipo: DestinoRuta) => {
-    if (tipo === "destino" && !origen) throw new Error("Establece primero un origen para buscar destinos cercanos.");
+    if (tipo === "destino" && !origen) {
+      throw new Error(
+        "Establece primero un origen para buscar destinos cercanos.",
+      );
+    }
+
     const limites = bbox?.split(",").map(Number);
-    const centroMapa = limites?.length === 4 && limites.every(Number.isFinite)
-      ? { latitud: (limites[0] + limites[2]) / 2, longitud: (limites[1] + limites[3]) / 2 }
-      : { latitud: -33.0245, longitud: -71.5518 };
-    const referencia = tipo === "destino" && origen ? origen : origen ?? ubicacionActual ?? centroMapa;
+
+    const centroMapa =
+      limites?.length === 4 && limites.every(Number.isFinite)
+        ? {
+            latitud: (limites[0] + limites[2]) / 2,
+            longitud: (limites[1] + limites[3]) / 2,
+          }
+        : { latitud: -33.0245, longitud: -71.5518 };
+
+    const referencia =
+      tipo === "destino" && origen
+        ? origen
+        : origen ?? ubicacionActual ?? centroMapa;
+
     return buscarDirecciones("http://localhost:3000", consulta, referencia);
   };
-  const seleccionarDireccion = (tipo: DestinoRuta, resultado: ResultadoDireccion) => {
+
+  const seleccionarDireccion = (
+    tipo: DestinoRuta,
+    resultado: ResultadoDireccion,
+  ) => {
     if (seleccionarPunto(tipo, resultado.latitud, resultado.longitud)) {
-      setEstadoUbicacion(`${tipo === "origen" ? "Origen" : "Destino"} establecido desde la dirección seleccionada.`);
+      setEstadoUbicacion(
+        `${tipo === "origen" ? "Origen" : "Destino"} establecido desde la dirección seleccionada.`,
+      );
     }
   };
 
-  /*
-   * Carga zonas y delitos una sola vez.
-   */
-
-  const [
-  rangoHorario,
-  setRangoHorario,
-] = useState(
-  "20:00 - 23:59"
-);
+  const [rangoHorario, setRangoHorario] = useState("20:00 - 23:59");
 
   useEffect(() => {
     let cancelado = false;
 
-    const cargarZonasYDelitos =
-      async () => {
-        try {
-          const comunas = [
-            "Viña del Mar",
-            "Concón",
-            "Valparaíso",
-          ];
+    const cargarZonasYDelitos = async () => {
+      try {
+        const comunas = ["Viña del Mar", "Concón", "Valparaíso"];
 
-          const respuestasZonas =
-            await Promise.all(
-              comunas.map(
-                (comuna) =>
-                  fetch(
-                    `http://localhost:3000/api/geografia?comuna=${encodeURIComponent(
-                      comuna
-                    )}&rango_horario=${encodeURIComponent(
-                      rangoHorario
-                    )}`
-                  )
-              )
-            );
+        const respuestasZonas = await Promise.all(
+          comunas.map((comuna) =>
+            fetch(
+              `http://localhost:3000/api/geografia?comuna=${encodeURIComponent(
+                comuna,
+              )}&rango_horario=${encodeURIComponent(rangoHorario)}`,
+            ),
+          ),
+        );
 
-          const respuestaDelitos =
-            await fetch(
-              "http://localhost:3000/api/delitos?rango_horario=" +
-                encodeURIComponent(
-                  rangoHorario
-                )
-            );
+        const respuestaDelitos = await fetch(
+          "http://localhost:3000/api/delitos?rango_horario=" +
+            encodeURIComponent(rangoHorario),
+        );
 
-          for (const respuesta of respuestasZonas) {
-            if (!respuesta.ok) {
-              throw new Error(
-                `Error zonas HTTP: ${respuesta.status}`
-              );
-            }
-          }
-
-          if (!respuestaDelitos.ok) {
-            throw new Error(
-              `Error delitos HTTP: ${respuestaDelitos.status}`
-            );
-          }
-
-          const resultadosZonas =
-            await Promise.all(
-              respuestasZonas.map(
-                (respuesta) =>
-                  respuesta.json()
-              )
-            );
-
-          const resultadoDelitos =
-            await respuestaDelitos.json();
-
-          const zonasTodas =
-            resultadosZonas.flatMap(
-              (
-                resultado,
-                index
-              ) => {
-                const comuna =
-                  comunas[index];
-
-                return (
-                  resultado.data || []
-                ).map(
-                  (zona: any) => ({
-                    ...zona,
-                    comuna,
-                  })
-                );
-              }
-            );
-
-          if (cancelado) {
-            return;
-          }
-
-          setZonas(zonasTodas);
-
-          setDelitos(
-            resultadoDelitos.data || []
-          );
-        } catch (error) {
-          if (!cancelado) {
-            console.error(
-              "Error obteniendo zonas y delitos:",
-              error
-            );
+        for (const respuesta of respuestasZonas) {
+          if (!respuesta.ok) {
+            throw new Error(`Error zonas HTTP: ${respuesta.status}`);
           }
         }
-      };
 
-    cargarZonasYDelitos();
+        if (!respuestaDelitos.ok) {
+          throw new Error(`Error delitos HTTP: ${respuestaDelitos.status}`);
+        }
+
+        const resultadosZonas = await Promise.all(
+          respuestasZonas.map((respuesta) => respuesta.json()),
+        );
+
+        const resultadoDelitos = await respuestaDelitos.json();
+
+        const zonasTodas = resultadosZonas.flatMap(
+          (resultado, index) => {
+            const comuna = comunas[index];
+
+            return (resultado.data || []).map((zona: any) => ({
+              ...zona,
+              comuna,
+            }));
+          },
+        );
+
+        if (cancelado) {
+          return;
+        }
+
+        setZonas(zonasTodas);
+        setDelitos(resultadoDelitos.data || []);
+      } catch (error) {
+        if (!cancelado) {
+          console.error("Error obteniendo zonas y delitos:", error);
+        }
+      }
+    };
+
+    void cargarZonasYDelitos();
 
     return () => {
       cancelado = true;
@@ -455,8 +430,10 @@ export default function MapaRiesgoClient() {
     const id = ++rutaIdRef.current;
     rutaAbortRef.current?.abort();
     rutaAbortRef.current = null;
+
     if (!origen || !destino) {
       setRuta(null);
+      setRutaSeleccionada(null);
       setErrorRuta(null);
       setCargandoRuta(false);
       return;
@@ -465,6 +442,7 @@ export default function MapaRiesgoClient() {
     const controlador = new AbortController();
     rutaAbortRef.current = controlador;
     setRuta(null);
+    setRutaSeleccionada(null);
 
     const consultarRuta = async () => {
       setCargandoRuta(true);
@@ -473,71 +451,64 @@ export default function MapaRiesgoClient() {
       try {
         const parametros = new URLSearchParams();
 
-        parametros.set(
-          "comuna",
-          comunaRedPeatonal
-        );
-
-        parametros.set(
-          "origen_lat",
-          String(origen.latitud)
-        );
-
-        parametros.set(
-          "origen_lon",
-          String(origen.longitud)
-        );
-
-        parametros.set(
-          "destino_lat",
-          String(destino.latitud)
-        );
-
-        parametros.set(
-          "destino_lon",
-          String(destino.longitud)
-        );
-
-        parametros.set(
-          "rango_horario",
-          rangoHorario
-        );
+        parametros.set("comuna", comunaRedPeatonal);
+        parametros.set("origen_lat", String(origen.latitud));
+        parametros.set("origen_lon", String(origen.longitud));
+        parametros.set("destino_lat", String(destino.latitud));
+        parametros.set("destino_lon", String(destino.longitud));
+        parametros.set("rango_horario", rangoHorario);
 
         const url =
-          `http://localhost:3000/api/rutas?${parametros.toString()}`;
+          `http://localhost:3000/api/rutas/alternativas?${parametros.toString()}`;
 
         console.log("Consultando ruta:", url);
 
-        const respuesta = await fetch(url, { signal: controlador.signal });
+        const respuesta = await fetch(url, {
+          signal: controlador.signal,
+        });
 
         if (!respuesta.ok) {
-          throw new Error(
-            `Error ruta HTTP: ${respuesta.status}`
-          );
+          throw new Error(`Error ruta HTTP: ${respuesta.status}`);
         }
 
         const resultado = await respuesta.json();
 
-        console.log("Resultado ruta:", resultado);
+        console.log("Resultado rutas alternativas:", resultado);
 
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
+
         setRuta(resultado);
+
+        if (resultado.encontrada === false) {
+          setErrorRuta(
+            resultado.mensaje ??
+              "No se encontraron rutas para los puntos seleccionados.",
+          );
+        }
       } catch (error) {
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
-         console.error("Error consultando ruta:", error);
 
+        console.error("Error consultando ruta:", error);
         setRuta(null);
-        setErrorRuta("No fue posible calcular la ruta. Inténtelo nuevamente.");
-      }
-      finally {
-        if (id === rutaIdRef.current) setCargandoRuta(false);
+        setRutaSeleccionada(null);
+        setErrorRuta(
+          "No fue posible calcular la ruta. Inténtelo nuevamente.",
+        );
+      } finally {
+        if (id === rutaIdRef.current) {
+          setCargandoRuta(false);
+        }
       }
     };
 
     void consultarRuta();
+
     return () => {
       controlador.abort();
-      if (rutaAbortRef.current === controlador) rutaAbortRef.current = null;
+
+      if (rutaAbortRef.current === controlador) {
+        rutaAbortRef.current = null;
+      }
     };
   }, [
     origen,
@@ -546,9 +517,6 @@ export default function MapaRiesgoClient() {
     rangoHorario,
   ]);
 
-  /*
-   * Carga la red peatonal según el BBOX visible.
-   */
   useEffect(() => {
     if (!bbox) {
       return;
@@ -559,112 +527,69 @@ export default function MapaRiesgoClient() {
       return;
     }
 
-    const controlador =
-      new AbortController();
+    const controlador = new AbortController();
 
-    const cargarRedPeatonal =
-      async () => {
-        try {
-          setCargandoRedPeatonal(
-            true
-          );
+    const cargarRedPeatonal = async () => {
+      try {
+        setCargandoRedPeatonal(true);
+        setErrorRedPeatonal(false);
 
-          setErrorRedPeatonal(
-            false
-          );
+        const parametros = new URLSearchParams();
 
-          const parametros =
-            new URLSearchParams();
+        parametros.set("comuna", comunaRedPeatonal);
+        parametros.set("bbox", bbox);
 
-          parametros.set(
-            "comuna",
-            comunaRedPeatonal
-          );
+        const url =
+          `http://localhost:3000/api/geografia/red-peatonal?${parametros.toString()}`;
 
-          parametros.set(
-            "bbox",
-            bbox
-          );
+        console.log("Consultando red peatonal:", url);
 
-          const url =
-            `http://localhost:3000/api/geografia/red-peatonal?${parametros.toString()}`;
+        const respuesta = await fetch(url, {
+          signal: controlador.signal,
+        });
 
-          console.log(
-            "Consultando red peatonal:",
-            url
-          );
-
-          const respuesta =
-            await fetch(url, {
-              signal:
-                controlador.signal,
-            });
-
-          if (!respuesta.ok) {
-            throw new Error(
-              `Error red peatonal HTTP: ${respuesta.status}`
-            );
-          }
-
-          const resultado =
-            await respuesta.json();
-
-          if (
-            controlador.signal
-              .aborted
-          ) {
-            return;
-          }
-
-          console.log(
-            `Red peatonal ${comunaRedPeatonal}:`,
-            resultado.total,
-            "segmentos"
-          );
-
-          setRedPeatonal(
-            resultado.data || []
-          );
-        } catch (error: any) {
-          if (
-            error?.name ===
-            "AbortError"
-          ) {
-            return;
-          }
-
-          console.error(
-            `Error obteniendo red peatonal de ${comunaRedPeatonal}:`,
-            error
-          );
-
-          setErrorRedPeatonal(
-            true
-          );
-
-          setRedPeatonal([]);
-        } finally {
-          if (
-            !controlador.signal
-              .aborted
-          ) {
-            setCargandoRedPeatonal(
-              false
-            );
-          }
+        if (!respuesta.ok) {
+          throw new Error(`Error red peatonal HTTP: ${respuesta.status}`);
         }
-      };
 
-    cargarRedPeatonal();
+        const resultado = await respuesta.json();
+
+        if (controlador.signal.aborted) {
+          return;
+        }
+
+        console.log(
+          `Red peatonal ${comunaRedPeatonal}:`,
+          resultado.total,
+          "segmentos",
+        );
+
+        setRedPeatonal(resultado.data || []);
+      } catch (error: any) {
+        if (error?.name === "AbortError") {
+          return;
+        }
+
+        console.error(
+          `Error obteniendo red peatonal de ${comunaRedPeatonal}:`,
+          error,
+        );
+
+        setErrorRedPeatonal(true);
+        setRedPeatonal([]);
+      } finally {
+        if (!controlador.signal.aborted) {
+          setCargandoRedPeatonal(false);
+        }
+      }
+    };
+
+    void cargarRedPeatonal();
 
     return () => {
       controlador.abort();
     };
-  }, [
-    comunaRedPeatonal,
-    bbox,
-    zoom,
-  ]);
+  }, [comunaRedPeatonal, bbox, zoom]);
 
   return (
     <div
@@ -675,10 +600,7 @@ export default function MapaRiesgoClient() {
       }}
     >
       <MapContainer
-        center={[
-          -33.0245,
-          -71.5518,
-        ]}
+        center={[-33.0245, -71.5518]}
         zoom={13}
         style={{
           width: "100%",
@@ -692,16 +614,28 @@ export default function MapaRiesgoClient() {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <EscuchaBbox
-          onBboxChange={
-            setBbox
-          }
+        <EscuchaBbox onBboxChange={setBbox} />
+
+        <SeleccionarPuntos
+          modo={modoSeleccion}
+          onSeleccionarPunto={seleccionarPunto}
         />
 
-        <SeleccionarPuntos modo={modoSeleccion} onSeleccionarPunto={seleccionarPunto} />
         <CentrarPunto punto={puntoParaCentrar} />
 
-        {ubicacionActual && <CircleMarker center={[ubicacionActual.latitud, ubicacionActual.longitud]} radius={6} pathOptions={{ color: "#0f766e", fillColor: "#14b8a6", fillOpacity: 1 }}><Tooltip direction="top">Mi ubicación</Tooltip></CircleMarker>}
+        {ubicacionActual && (
+          <CircleMarker
+            center={[ubicacionActual.latitud, ubicacionActual.longitud]}
+            radius={6}
+            pathOptions={{
+              color: "#0f766e",
+              fillColor: "#14b8a6",
+              fillOpacity: 1,
+            }}
+          >
+            <Tooltip direction="top">Mi ubicación</Tooltip>
+          </CircleMarker>
+        )}
 
         {origen && (
           <CircleMarker
@@ -735,84 +669,86 @@ export default function MapaRiesgoClient() {
           </CircleMarker>
         )}
 
-        {geometriaRuta.length >= 2 && (
-          <Polyline
-            positions={geometriaRuta}
-            pathOptions={{
-              color: "#16a34a",
-              weight: 6,
-              opacity: 0.9,
-            }}
-          >
-            <Tooltip
-              permanent
-              direction="top"
-              offset={[0, -8]}
-              opacity={0.95}
-            >
-              <div
-                style={{
-                  textAlign: "center",
-                  fontFamily: "Arial, sans-serif",
-                }}
-              >
-                <div>
-                  Distancia:{" "}
-                  {formatearDistancia(Number(ruta?.distancia_metros))}
-                </div>
+        {[...rutasParaDibujar].reverse().map((alternativa: any) => {
+          const geometria = alternativa.geometria as [number, number][];
 
-                <div>
-                  Riesgo: {ruta?.nivel_riesgo ?? "No disponible"}
-                </div>
-
-                <div>
-                  Puntaje:{" "}
-                  {Number.isFinite(Number(ruta?.puntaje_riesgo))
-                    ? Number(ruta?.puntaje_riesgo).toFixed(2)
-                    : "No disponible"}
-                </div>
-              </div>
-            </Tooltip>
-          </Polyline>
-        )}
-
-        <ControlZoom
-          setZoom={setZoom}
-        />
-
-        <ControlesMapa />
-
-        <CentrarComuna
-          comuna={
-            comunaRedPeatonal
+          if (geometria.length < 2) {
+            return null;
           }
-        />
 
-        {mostrarRedPeatonal &&
-          zoom >= 12 && (
-            <CapaRedPeatonal
-              redPeatonal={
-                redPeatonal
-              }
-              comunaRedPeatonal={
-                comunaRedPeatonal
-              }
-            />
-          )}
+          const colorRuta =
+            alternativa.perfil_ruta === "menor_riesgo"
+              ? "#16a34a"
+              : alternativa.perfil_ruta === "equilibrada"
+                ? "#2563eb"
+                : alternativa.perfil_ruta === "mas_rapida"
+                  ? "#ea580c"
+                  : "#64748b";
 
-        {mostrarZonasRiesgo && (
-          <CapaZonasRiesgo
-            zonas={zonas}
-            zoom={zoom}
+          return (
+            <Polyline
+              key={alternativa.perfil_ruta}
+              positions={geometria}
+              pathOptions={{
+                color: colorRuta,
+                weight: 5,
+                opacity: 0.9,
+              }}
+            >
+              <Tooltip direction="top" offset={[0, -8]}>
+                <div
+                  style={{
+                    textAlign: "center",
+                    fontFamily: "Arial, sans-serif",
+                  }}
+                >
+                  <strong>{alternativa.nombre_perfil_ruta}</strong>
+
+                  <div>
+                    Distancia:{" "}
+                    {formatearDistancia(
+                      Number(alternativa.distancia_metros),
+                    )}
+                  </div>
+
+                  <div>
+                    Tiempo:{" "}
+                    {Number(
+                      alternativa.tiempo_estimado_minutos,
+                    ).toFixed(1)}{" "}
+                    min
+                  </div>
+
+                  <div>Riesgo: {alternativa.nivel_riesgo}</div>
+
+                  <div>
+                    Puntaje:{" "}
+                    {Number(alternativa.puntaje_riesgo).toFixed(2)}
+                  </div>
+                </div>
+              </Tooltip>
+            </Polyline>
+          );
+        })}
+
+        <ControlZoom setZoom={setZoom} />
+        <ControlesMapa />
+        <CentrarComuna comuna={comunaRedPeatonal} />
+
+        {mostrarRedPeatonal && zoom >= 12 && (
+          <CapaRedPeatonal
+            redPeatonal={redPeatonal}
+            comunaRedPeatonal={comunaRedPeatonal}
           />
         )}
 
-        {mostrarDelitos &&
-          zoom >= 13 && (
-            <CapaDelitos
-              delitos={delitos}
-            />
-          )}
+        {mostrarZonasRiesgo && (
+          <CapaZonasRiesgo zonas={zonas} zoom={zoom} />
+        )}
+
+        {mostrarDelitos && zoom >= 13 && (
+          <CapaDelitos delitos={delitos} />
+        )}
       </MapContainer>
 
       <UbicacionesMapaWeb
@@ -822,13 +758,8 @@ export default function MapaRiesgoClient() {
         comuna={comunaRedPeatonal}
         rangoHorario={rangoHorario}
         alElegirModo={(modo) => {
-          if (
-            modo === "destino" &&
-            !origen
-          ) {
-            setEstadoUbicacion(
-              "Primero establece un origen."
-            );
+          if (modo === "destino" && !origen) {
+            setEstadoUbicacion("Primero establece un origen.");
             setModoSeleccion("origen");
             return;
           }
@@ -837,82 +768,48 @@ export default function MapaRiesgoClient() {
           setModoSeleccion(modo);
         }}
         alReiniciar={reiniciarPuntos}
-        alUsarMiUbicacion={
-          usarMiUbicacion
-        }
-        alCambiarComuna={
-          setComunaRedPeatonal
-        }
-        alCambiarHorario={
-          setRangoHorario
-        }
-        buscandoUbicacion={
-          buscandoUbicacion
-        }
-        estadoUbicacion={
-          estadoUbicacion
-        }
-        buscarDireccion={
-          buscarDireccion
-        }
-        seleccionarDireccion={
-          seleccionarDireccion
-        }
+        alUsarMiUbicacion={usarMiUbicacion}
+        alCambiarComuna={setComunaRedPeatonal}
+        alCambiarHorario={setRangoHorario}
+        buscandoUbicacion={buscandoUbicacion}
+        estadoUbicacion={estadoUbicacion}
+        buscarDireccion={buscarDireccion}
+        seleccionarDireccion={seleccionarDireccion}
       />
 
       <BotonRedPeatonal
-        mostrar={
-          mostrarRedPeatonal
-        }
+        mostrar={mostrarRedPeatonal}
         onClick={() =>
-          setMostrarRedPeatonal(
-            (actual) =>
-              !actual
-          )
+          setMostrarRedPeatonal((actual) => !actual)
         }
       />
 
       <BotonDelitos
-        mostrar={
-          mostrarDelitos
-        }
+        mostrar={mostrarDelitos}
         onClick={() =>
-          setMostrarDelitos(
-            (actual) =>
-              !actual
-          )
+          setMostrarDelitos((actual) => !actual)
         }
       />
 
       <button
         type="button"
         onClick={() =>
-          setMostrarZonasRiesgo(
-            (actual) =>
-              !actual
-          )
+          setMostrarZonasRiesgo((actual) => !actual)
         }
         style={{
           position: "absolute",
           zIndex: 10000,
           top: 115,
           right: 15,
-          background:
-            mostrarZonasRiesgo
-              ? "#dc2626"
-              : "#ffffff",
-          color:
-            mostrarZonasRiesgo
-              ? "#ffffff"
-              : "#111827",
+          background: mostrarZonasRiesgo ? "#dc2626" : "#ffffff",
+          color: mostrarZonasRiesgo ? "#ffffff" : "#111827",
           border: "none",
           borderRadius: 8,
           padding: "10px 14px",
           fontWeight: "bold",
           fontSize: 14,
           cursor: "pointer",
-          boxShadow:
-            "0 2px 8px rgba(0,0,0,0.25)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
           whiteSpace: "nowrap",
         }}
       >
@@ -922,12 +819,8 @@ export default function MapaRiesgoClient() {
       </button>
 
       <EstadoRedPeatonal
-        cargando={
-          cargandoRedPeatonal
-        }
-        error={
-          errorRedPeatonal
-        }
+        cargando={cargandoRedPeatonal}
+        error={errorRedPeatonal}
       />
 
       <LeyendaMapa />
@@ -975,23 +868,146 @@ export default function MapaRiesgoClient() {
         </div>
       )}
 
-      {ruta?.encontrada && (
+      {ruta?.encontrada && rutasAlternativas.length > 0 && (
         <div
           style={{
             position: "absolute",
             zIndex: 20000,
             bottom: 20,
             right: 20,
-            background: "rgba(255,255,255,0.96)",
-            padding: "10px 14px",
-            borderRadius: 8,
+            width: 320,
+            maxWidth: "calc(100% - 32px)",
+            maxHeight: "45%",
+            overflowY: "auto",
+            background: "rgba(255,255,255,0.97)",
+            padding: "14px",
+            borderRadius: 10,
             boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
             fontFamily: "Arial, sans-serif",
-            fontSize: 14,
-            fontWeight: "bold",
+            color: "#1f2937",
           }}
         >
-          Distancia: {Number(ruta.distancia_metros).toFixed(2)} m
+          <div
+            style={{
+              fontSize: 16,
+              fontWeight: "bold",
+              marginBottom: 10,
+            }}
+          >
+            Alternativas de ruta
+          </div>
+
+          <div
+            style={{
+              fontSize: 12,
+              color: "#4b5563",
+              marginBottom: 8,
+            }}
+          >
+            Selecciona una alternativa para mostrar solo esa ruta en el mapa.
+          </div>
+
+          {rutasAlternativas.length > 0 && ruta?.mensaje && (
+            <div
+              role="status"
+              style={{
+                background: "#fff7ed",
+                border: "1px solid #fed7aa",
+                color: "#9a3412",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.5,
+                marginBottom: 8,
+              }}
+            >
+              {ruta.mensaje}
+            </div>
+          )}
+
+          {rutasAlternativas.map((alternativa: any) => {
+            const color =
+              alternativa.perfil_ruta === "menor_riesgo"
+                ? "#16a34a"
+                : alternativa.perfil_ruta === "equilibrada"
+                  ? "#2563eb"
+                  : "#ea580c";
+
+            const seleccionada =
+              rutaSeleccionada === alternativa.perfil_ruta;
+
+            return (
+              <button
+                type="button"
+                key={alternativa.perfil_ruta}
+                aria-pressed={seleccionada}
+                onClick={() =>
+                  setRutaSeleccionada((actual) =>
+                    actual === alternativa.perfil_ruta
+                      ? null
+                      : alternativa.perfil_ruta,
+                  )
+                }
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  color: "#1f2937",
+                  borderLeft: `4px solid ${color}`,
+                  borderTop: "1px solid #e5e7eb",
+                  borderRight: "1px solid #e5e7eb",
+                  borderBottom: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  marginBottom: 8,
+                  background: seleccionada ? "#f0fdf4" : "#ffffff",
+                  fontFamily: "inherit",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    fontWeight: "bold",
+                    fontSize: 14,
+                    marginBottom: 4,
+                  }}
+                >
+                  <span>{alternativa.nombre_perfil_ruta}</span>
+
+                  {seleccionada && (
+                    <span style={{ color, fontSize: 12 }}>
+                      ✓ Seleccionada
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ fontSize: 13, marginBottom: 3 }}>
+                  Distancia:{" "}
+                  {formatearDistancia(
+                    Number(alternativa.distancia_metros),
+                  )}
+                  {" · "}
+                  Tiempo:{" "}
+                  {Number(
+                    alternativa.tiempo_estimado_minutos,
+                  ).toFixed(1)}{" "}
+                  min
+                </div>
+
+                <div style={{ fontSize: 13 }}>
+                  Riesgo: {alternativa.nivel_riesgo}
+                  {" · "}
+                  Puntaje:{" "}
+                  {Number(alternativa.puntaje_riesgo).toFixed(2)}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
