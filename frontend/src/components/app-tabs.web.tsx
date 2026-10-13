@@ -6,7 +6,7 @@ import {
   TabTriggerSlotProps,
   TabListProps,
 } from "expo-router/ui";
-import { Pressable, View, StyleSheet } from "react-native";
+import { Pressable, View, Text, StyleSheet } from "react-native";
 
 export default function AppTabs() {
   return (
@@ -21,24 +21,12 @@ export default function AppTabs() {
 
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger
-            name="home"
-            href="/"
-            asChild
-          >
-            <TabButton>
-              Home
-            </TabButton>
+          <TabTrigger name="home" href="/" asChild>
+            <TabButton>Home</TabButton>
           </TabTrigger>
 
-          <TabTrigger
-            name="explore"
-            href="/explore"
-            asChild
-          >
-            <TabButton>
-              Explore
-            </TabButton>
+          <TabTrigger name="explore" href="/explore" asChild>
+            <TabButton>Explore</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>
@@ -55,20 +43,17 @@ export function TabButton({
       {...props}
       style={styles.hiddenButton}
     >
-      <View>{children}</View>
+      <Text>{children}</Text>
     </Pressable>
   );
 }
 
-export function CustomTabList(
-  props: TabListProps
-) {
+export function CustomTabList(props: TabListProps) {
   return (
     <View
       {...props}
       style={styles.hiddenTabList}
       accessible={false}
-      pointerEvents="none"
     />
   );
 }
