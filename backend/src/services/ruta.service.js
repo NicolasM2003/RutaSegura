@@ -827,6 +827,206 @@ const calcularRutaSegura = async ({
 };
 
 /*
+ * Parámetros para detectar recorridos redundantes.
+ *
+ * Dos rutas con al menos un 90 % de distancia compartida
+ * por las mismas calles se consideran similares.
+ *
+ * Si sus puntajes de riesgo difieren en 8 puntos o más,
+ * se conservan ambas por posible relevancia de seguridad.
+ */
+const UMBRAL_SIMILITUD_CORREDOR = 0.90;
+const DIFERENCIA_RIESGO_RELEVANTE = 8;
+
+/*
+ * Normaliza el nombre de una calle para comparar variantes como:
+ *
+ * "Avenida Libertad" -> "libertad"
+ * "Av. Libertad"     -> "libertad"
+ * "Libertad"         -> "libertad"
+ *
+ * Esto permite comparar aceras representadas mediante
+ * distintos elementos de OpenStreetMap.
+ */
+const normalizarNombreVia = (nombre) => {
+  if (typeof nombre !== "string" || !nombre.trim()) {
+    return null;
+  }
+
+  const normalizado = nombre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(
+      /\b(?:avenida|avda|av|calle|pasaje|pje|camino|ruta|diagonal|paseo|caletera)\b/g,
+      " "
+    )
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalizado || null;
+};
+
+/*
+ * Agrupa la distancia recorrida según la calle.
+ *
+ * Prioridad:
+ * 1. Nombre normalizado de la calle.
+ * 2. Identificador OSM, cuando el segmento no tiene nombre.
+ */
+const obtenerHuellaCorredores = (ruta) => {
+  const segmentos = Array.isArray(ruta.segmentos)
+    ? ruta.segmentos
+    : [];
+
+  const distanciasPorCorredor = new Map();
+
+  let distanciaSegmentos = 0;
+
+  for (const segmento of segmentos) {
+    const distancia = Number(segmento.distancia_metros);
+
+    if (!Number.isFinite(distancia) || distancia <= 0) {
+      continue;
+    }
+
+    distanciaSegmentos += distancia;
+
+    const nombreVia = normalizarNombreVia(segmento.nombre);
+
+    let claveCorredor = null;
+
+    if (nombreVia) {
+      claveCorredor = `via:${nombreVia}`;
+    } else if (segmento.id_osm != null) {
+      claveCorredor = `osm:${segmento.id_osm}`;
+    }
+
+    // Sin nombre ni identificador no podemos comparar
+    // de forma fiable este segmento por corredor.
+    if (!claveCorredor) {
+      continue;
+    }
+
+    const distanciaAnterior =
+      distanciasPorCorredor.get(claveCorredor) || 0;
+
+    distanciasPorCorredor.set(
+      claveCorredor,
+      distanciaAnterior + distancia
+    );
+  }
+
+  const distanciaInformada = Number(ruta.distancia_metros);
+
+  const distanciaTotal =
+    Number.isFinite(distanciaInformada) &&
+    distanciaInformada > 0
+      ? distanciaInformada
+      : distanciaSegmentos;
+
+  return {
+    distanciasPorCorredor,
+    distanciaTotal,
+  };
+};
+
+/*
+ * Calcula cuánto comparten dos rutas según las calles utilizadas.
+ *
+ * El resultado va de 0 a 1:
+ * 0 = no comparten corredores identificables.
+ * 1 = comparten toda la distancia identificada.
+ */
+const calcularSimilitudCorredor = (rutaA, rutaB) => {
+  const huellaA = obtenerHuellaCorredores(rutaA);
+  const huellaB = obtenerHuellaCorredores(rutaB);
+
+  if (
+    huellaA.distanciaTotal <= 0 ||
+    huellaB.distanciaTotal <= 0 ||
+    huellaA.distanciasPorCorredor.size === 0 ||
+    huellaB.distanciasPorCorredor.size === 0
+  ) {
+    return 0;
+  }
+
+  let distanciaCompartida = 0;
+
+  for (const [corredor, distanciaA] of
+    huellaA.distanciasPorCorredor) {
+    const distanciaB =
+      huellaB.distanciasPorCorredor.get(corredor) || 0;
+
+    distanciaCompartida += Math.min(
+      distanciaA,
+      distanciaB
+    );
+  }
+
+  return Math.min(
+    1,
+    distanciaCompartida /
+      Math.max(
+        huellaA.distanciaTotal,
+        huellaB.distanciaTotal
+      )
+  );
+};
+
+/*
+ * Determina si dos alternativas son redundantes.
+ */
+const sonRutasEquivalentes = (rutaA, rutaB) => {
+  const nodosA = Array.isArray(rutaA.nodos_ruta)
+    ? rutaA.nodos_ruta.join("->")
+    : "";
+
+  const nodosB = Array.isArray(rutaB.nodos_ruta)
+    ? rutaB.nodos_ruta.join("->")
+    : "";
+
+  // Caso 1: misma secuencia exacta de nodos.
+  if (nodosA && nodosA === nodosB) {
+    return true;
+  }
+
+  // Caso 2: utilizan prácticamente los mismos corredores.
+  const similitud = calcularSimilitudCorredor(
+    rutaA,
+    rutaB
+  );
+
+  if (similitud < UMBRAL_SIMILITUD_CORREDOR) {
+    return false;
+  }
+
+  // No descartar una posible alternativa más segura
+  // cuando la diferencia de riesgo sea relevante.
+  const riesgoA =
+    rutaA.puntaje_riesgo == null
+      ? NaN
+      : Number(rutaA.puntaje_riesgo);
+
+  const riesgoB =
+    rutaB.puntaje_riesgo == null
+      ? NaN
+      : Number(rutaB.puntaje_riesgo);
+
+  if (
+    Number.isFinite(riesgoA) &&
+    Number.isFinite(riesgoB) &&
+    Math.abs(riesgoA - riesgoB) >=
+      DIFERENCIA_RIESGO_RELEVANTE
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+/*
  * Genera las alternativas de navegación:
  * 1. Menor riesgo.
  * 2. Equilibrada.
@@ -898,13 +1098,20 @@ const calcularRutasAlternativas = async ({
     const identificadorRecorrido =
       resultado.nodos_ruta.join("->");
 
+    const rutaRedundante = rutasUnicas.some(
+      (rutaExistente) =>
+        sonRutasEquivalentes(
+          rutaExistente,
+          resultado
+        )
+    );
+
     if (
-      recorridosVistos.has(
-        identificadorRecorrido
-      )
+      recorridosVistos.has(identificadorRecorrido) ||
+      rutaRedundante
     ) {
       console.log(
-        `RUTA - Alternativa duplicada descartada: ${perfilRuta}`
+        `RUTA - Alternativa redundante descartada: ${perfilRuta}`
       );
 
       continue;

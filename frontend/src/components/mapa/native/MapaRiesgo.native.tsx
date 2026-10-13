@@ -71,13 +71,10 @@ type ResultadoRuta = {
 
 function normalizarGeometria(value: unknown): Array<[number, number]> {
   if (!Array.isArray(value)) return [];
-
   return value.flatMap((point): Array<[number, number]> => {
     if (!Array.isArray(point) || point.length < 2) return [];
-
     const lat = Number(point[0]);
     const lon = Number(point[1]);
-
     return Number.isFinite(lat) && Number.isFinite(lon)
       ? [[lat, lon]]
       : [];
@@ -95,7 +92,6 @@ function estaEnVista(
 ) {
   const latitude = Number(lat);
   const longitude = Number(lon);
-
   return (
     Number.isFinite(latitude) &&
     Number.isFinite(longitude) &&
@@ -106,7 +102,6 @@ function estaEnVista(
 
 function zoomEstimado(region: Region) {
   const anchoDp = Dimensions.get("window").width;
-
   return Math.round(
     Math.log2(
       (360 * anchoDp) /
@@ -120,7 +115,6 @@ function bboxVisible(region: Region) {
   const oeste = Math.max(-180, region.longitude - region.longitudeDelta / 2);
   const norte = Math.min(90, region.latitude + region.latitudeDelta / 2);
   const este = Math.min(180, region.longitude + region.longitudeDelta / 2);
-
   return [sur, oeste, norte, este]
     .map((value) => value.toFixed(6))
     .join(",");
@@ -149,7 +143,6 @@ function nombrePerfilRuta(ruta: RutaAlternativa): string {
   if (ruta.nombre_perfil_ruta) {
     return ruta.nombre_perfil_ruta;
   }
-
   switch (ruta.perfil_ruta) {
     case "menor_riesgo":
       return "Menor riesgo";
@@ -166,7 +159,6 @@ function formatearDistancia(distancia: number | undefined): string {
   if (distancia === undefined || !Number.isFinite(distancia)) {
     return "No disponible";
   }
-
   return distancia >= 1000
     ? `${(distancia / 1000).toFixed(2)} km`
     : `${Math.round(distancia)} m`;
@@ -222,7 +214,6 @@ function FichaElemento({
     <View style={styles.infoCard}>
       <View style={styles.infoHeader}>
         <Text style={styles.infoTitle}>{title}</Text>
-
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Cerrar información"
@@ -232,7 +223,6 @@ function FichaElemento({
           <Text style={styles.close}>×</Text>
         </Pressable>
       </View>
-
       {fields.map(([label, content]) => (
         <Text key={label} style={styles.infoLine}>
           <Text style={styles.infoLabel}>{label}: </Text>
@@ -334,7 +324,6 @@ export default function MapaRiesgo() {
 
   const elegirDestino = useCallback(() => {
     if (!origen) return;
-
     cancelarRutaPendiente();
     setDestino(null);
     setRuta(null);
@@ -523,7 +512,6 @@ export default function MapaRiesgo() {
       cancelarRutaPendiente();
 
       const { latitude, longitude } = event.nativeEvent.coordinate;
-
       const { punto, zonaProxima } = analizarPuntoSeleccionado(
         { latitude, longitude },
         zonas,
@@ -551,7 +539,6 @@ export default function MapaRiesgo() {
 
   useEffect(() => {
     const id = ++rutaId.current;
-
     rutaAbort.current?.abort();
     rutaAbort.current = null;
 
@@ -565,7 +552,6 @@ export default function MapaRiesgo() {
 
     const controller = new AbortController();
     rutaAbort.current = controller;
-
     setRuta(null);
     setRutaSeleccionada(null);
 
@@ -638,7 +624,6 @@ export default function MapaRiesgo() {
 
     return () => {
       controller.abort();
-
       if (rutaAbort.current === controller) {
         rutaAbort.current = null;
       }
@@ -755,7 +740,6 @@ export default function MapaRiesgo() {
     };
 
     void cargar();
-
     return () => controller.abort();
   }, [horario]);
 
@@ -785,7 +769,6 @@ export default function MapaRiesgo() {
     redAbort.current?.abort();
 
     const controller = new AbortController();
-
     redAbort.current = controller;
     redConsultaKey.current = consultaKey;
 
@@ -858,6 +841,7 @@ export default function MapaRiesgo() {
       rutaSeleccionada === null ||
       alternativa.perfil_ruta === rutaSeleccionada,
   );
+
   const clavePuntosRuta = origen && destino
     ? `${origen.latitud},${origen.longitud}:${destino.latitud},${destino.longitud}`
     : "sin-puntos";
@@ -1081,6 +1065,20 @@ export default function MapaRiesgo() {
 
               {!cargandoRuta &&
                 !errorRuta &&
+                (ruta?.rutas?.length ?? 0) > 0 &&
+                ruta?.mensaje && (
+                  <View style={styles.routeWarning}>
+                    <Text
+                      accessibilityLiveRegion="polite"
+                      style={styles.routeWarningText}
+                    >
+                      {ruta.mensaje}
+                    </Text>
+                  </View>
+                )}
+
+              {!cargandoRuta &&
+                !errorRuta &&
                 (ruta?.rutas ?? []).map((alternativa) => {
                   const color = colorPerfilRuta(alternativa.perfil_ruta);
                   const seleccionada =
@@ -1093,12 +1091,12 @@ export default function MapaRiesgo() {
                       accessibilityLabel={`Seleccionar ruta ${nombrePerfilRuta(alternativa)}`}
                       accessibilityState={{ selected: seleccionada }}
                       onPress={() =>
-                          setRutaSeleccionada((actual) =>
-                            actual === alternativa.perfil_ruta
-                              ? null
-                              : alternativa.perfil_ruta,
-                          )
-                        }
+                        setRutaSeleccionada((actual) =>
+                          actual === alternativa.perfil_ruta
+                            ? null
+                            : alternativa.perfil_ruta,
+                        )
+                      }
                       style={[
                         styles.alternativeCard,
                         { borderLeftColor: color },
@@ -1234,6 +1232,21 @@ const styles = StyleSheet.create({
     color: "#4b5563",
     fontSize: 12,
     marginBottom: 4,
+  },
+  routeWarning: {
+    backgroundColor: "#fff7ed",
+    borderColor: "#fed7aa",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  routeWarningText: {
+    color: "#9a3412",
+    fontSize: 12,
+    lineHeight: 17,
   },
   alternativeCard: {
     borderLeftWidth: 4,

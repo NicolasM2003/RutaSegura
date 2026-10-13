@@ -57,7 +57,6 @@ function EscuchaBbox({
         onBboxChange(nuevoBbox);
       }, 400);
     },
-
     zoomend: (evento) => {
       const bounds = evento.target.getBounds();
       const norte = bounds.getNorth();
@@ -101,7 +100,6 @@ export function SeleccionarPuntos({
   useMapEvents({
     click: (evento) => {
       if (!modo) return;
-
       onSeleccionarPunto(modo, evento.latlng.lat, evento.latlng.lng);
     },
   });
@@ -176,10 +174,8 @@ export default function MapaRiesgoClient() {
   const [zonas, setZonas] = useState<any[]>([]);
   const [delitos, setDelitos] = useState<any[]>([]);
   const [redPeatonal, setRedPeatonal] = useState<any[]>([]);
-
   const [comunaRedPeatonal, setComunaRedPeatonal] =
     useState("Viña del Mar");
-
   const [mostrarRedPeatonal, setMostrarRedPeatonal] = useState(true);
   const [mostrarZonasRiesgo, setMostrarZonasRiesgo] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
@@ -213,7 +209,6 @@ export default function MapaRiesgoClient() {
 
   const [buscandoUbicacion, setBuscandoUbicacion] = useState(false);
   const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
-
   const [ruta, setRuta] = useState<any>(null);
   const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
   const [cargandoRuta, setCargandoRuta] = useState(false);
@@ -433,7 +428,6 @@ export default function MapaRiesgoClient() {
 
   useEffect(() => {
     const id = ++rutaIdRef.current;
-
     rutaAbortRef.current?.abort();
     rutaAbortRef.current = null;
 
@@ -447,7 +441,6 @@ export default function MapaRiesgoClient() {
 
     const controlador = new AbortController();
     rutaAbortRef.current = controlador;
-
     setRuta(null);
     setRutaSeleccionada(null);
 
@@ -496,7 +489,6 @@ export default function MapaRiesgoClient() {
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
 
         console.error("Error consultando ruta:", error);
-
         setRuta(null);
         setRutaSeleccionada(null);
         setErrorRuta(
@@ -740,9 +732,7 @@ export default function MapaRiesgoClient() {
         })}
 
         <ControlZoom setZoom={setZoom} />
-
         <ControlesMapa />
-
         <CentrarComuna comuna={comunaRedPeatonal} />
 
         {mostrarRedPeatonal && zoom >= 12 && (
@@ -916,6 +906,24 @@ export default function MapaRiesgoClient() {
           >
             Selecciona una alternativa para mostrar solo esa ruta en el mapa.
           </div>
+
+          {rutasAlternativas.length > 0 && ruta?.mensaje && (
+            <div
+              role="status"
+              style={{
+                background: "#fff7ed",
+                border: "1px solid #fed7aa",
+                color: "#9a3412",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.5,
+                marginBottom: 8,
+              }}
+            >
+              {ruta.mensaje}
+            </div>
+          )}
 
           {rutasAlternativas.map((alternativa: any) => {
             const color =
