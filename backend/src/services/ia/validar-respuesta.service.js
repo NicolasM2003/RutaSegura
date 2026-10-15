@@ -1,23 +1,17 @@
 /**
  * Valida la respuesta generada por el modelo de IA.
- *
- * Comprueba el JSON, los campos obligatorios y que cada
- * comparación corresponda a un perfil de ruta esperado.
+ * La recomendación y las comparaciones deben corresponder
+ * exclusivamente a los perfiles de ruta recibidos.
  */
 
 const crearErrorValidacion = (codigo, mensaje) => {
   const error = new Error(mensaje);
   error.name = "RespuestaModeloInvalidaError";
   error.code = codigo;
-
   return error;
 };
 
-const validarTexto = (
-  valor,
-  campo,
-  longitudMaxima
-) => {
+const validarTexto = (valor, campo, longitudMaxima) => {
   if (
     typeof valor !== "string" ||
     !valor.trim() ||
@@ -44,13 +38,10 @@ const validarObjeto = (valor, campo, clavesEsperadas) => {
     );
   }
 
-  const clavesRecibidas = Object.keys(valor).sort();
-  const clavesOrdenadas = [...clavesEsperadas].sort();
+  const recibidas = Object.keys(valor).sort();
+  const esperadas = [...clavesEsperadas].sort();
 
-  if (
-    JSON.stringify(clavesRecibidas) !==
-    JSON.stringify(clavesOrdenadas)
-  ) {
+  if (JSON.stringify(recibidas) !== JSON.stringify(esperadas)) {
     throw crearErrorValidacion(
       "IA_ESTRUCTURA_INVALIDA",
       `El campo ${campo} no cumple la estructura esperada.`
@@ -58,25 +49,14 @@ const validarObjeto = (valor, campo, clavesEsperadas) => {
   }
 };
 
-/**
- * @param {{ output_text?: string }} respuesta Respuesta del SDK.
- * @param {string[]} perfilesEsperados Perfiles presentes en el contexto enviado.
- * @returns {{ resumen_general: string, comparaciones: Array, consideraciones: string[] }}
- */
-const validarRespuestaModelo = (
-  respuesta,
-  perfilesEsperados
-) => {
+const validarRespuestaModelo = (respuesta, perfilesEsperados) => {
   if (
     !Array.isArray(perfilesEsperados) ||
     perfilesEsperados.length === 0 ||
     perfilesEsperados.some(
-      (perfil) =>
-        typeof perfil !== "string" ||
-        !perfil.trim()
+      (perfil) => typeof perfil !== "string" || !perfil.trim()
     ) ||
-    new Set(perfilesEsperados).size !==
-      perfilesEsperados.length
+    new Set(perfilesEsperados).size !== perfilesEsperados.length
   ) {
     throw crearErrorValidacion(
       "IA_PERFILES_ESPERADOS_INVALIDOS",
@@ -108,6 +88,7 @@ const validarRespuestaModelo = (
 
   validarObjeto(datos, "respuesta", [
     "resumen_general",
+    "recomendacion",
     "comparaciones",
     "consideraciones",
   ]);
@@ -116,6 +97,32 @@ const validarRespuestaModelo = (
     datos.resumen_general,
     "resumen_general",
     600
+  );
+
+  const perfilesPermitidos = new Set(perfilesEsperados);
+
+  validarObjeto(datos.recomendacion, "recomendacion", [
+    "perfil_ruta",
+    "motivo",
+  ]);
+
+  const perfilRecomendado = validarTexto(
+    datos.recomendacion.perfil_ruta,
+    "recomendacion.perfil_ruta",
+    100
+  );
+
+  if (!perfilesPermitidos.has(perfilRecomendado)) {
+    throw crearErrorValidacion(
+      "IA_PERFIL_RECOMENDADO_INVALIDO",
+      "La recomendación no corresponde a una ruta existente."
+    );
+  }
+
+  const motivoRecomendacion = validarTexto(
+    datos.recomendacion.motivo,
+    "recomendacion.motivo",
+    500
   );
 
   if (
@@ -128,16 +135,14 @@ const validarRespuestaModelo = (
     );
   }
 
-  const perfilesPermitidos = new Set(perfilesEsperados);
   const perfilesRecibidos = new Set();
 
   const comparaciones = datos.comparaciones.map(
     (comparacion, indice) => {
-      validarObjeto(
-        comparacion,
-        `comparaciones[${indice}]`,
-        ["perfil_ruta", "explicacion"]
-      );
+      validarObjeto(comparacion, `comparaciones[${indice}]`, [
+        "perfil_ruta",
+        "explicacion",
+      ]);
 
       const perfil = validarTexto(
         comparacion.perfil_ruta,
@@ -189,6 +194,10 @@ const validarRespuestaModelo = (
 
   return {
     resumen_general: resumenGeneral,
+    recomendacion: {
+      perfil_ruta: perfilRecomendado,
+      motivo: motivoRecomendacion,
+    },
     comparaciones,
     consideraciones,
   };

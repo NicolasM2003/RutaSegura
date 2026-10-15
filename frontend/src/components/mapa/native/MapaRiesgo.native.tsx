@@ -37,20 +37,16 @@ import {
   type DestinoRuta,
   type ResultadoDireccion,
 } from "../direccion";
-
 const REGION_INICIAL: Region = {
   latitude: -33.0245,
   longitude: -71.5518,
   latitudeDelta: 0.08,
   longitudeDelta: 0.08,
 };
-
 const COMUNAS = ["Viña del Mar", "Concón", "Valparaíso"];
-
 type Carga<T> = {
   data?: T[];
 };
-
 type RutaAlternativa = {
   perfil_ruta: string;
   nombre_perfil_ruta?: string;
@@ -60,6 +56,20 @@ type RutaAlternativa = {
   nivel_riesgo?: string;
   puntaje_riesgo?: number;
 };
+type InterpretacionIA = {
+  disponible: boolean;
+  resumen_general?: string;
+  recomendacion?: {
+    perfil_ruta: string;
+    motivo: string;
+  };
+  comparaciones?: Array<{
+    perfil_ruta: string;
+    explicacion: string;
+  }>;
+  consideraciones?: string[];
+  mensaje?: string;
+};
 
 type ResultadoRuta = {
   encontrada?: boolean;
@@ -67,8 +77,8 @@ type ResultadoRuta = {
   rutas?: RutaAlternativa[];
   mensaje?: string;
   message?: string;
+  interpretacion_ia?: InterpretacionIA;
 };
-
 function normalizarGeometria(value: unknown): Array<[number, number]> {
   if (!Array.isArray(value)) return [];
   return value.flatMap((point): Array<[number, number]> => {
@@ -80,11 +90,9 @@ function normalizarGeometria(value: unknown): Array<[number, number]> {
       : [];
   });
 }
-
 function enRango(value: number, center: number, delta: number) {
   return Math.abs(value - center) <= delta / 2 + delta * 0.08;
 }
-
 function estaEnVista(
   lat: number | string,
   lon: number | string,
@@ -99,7 +107,6 @@ function estaEnVista(
     enRango(longitude, region.longitude, region.longitudeDelta)
   );
 }
-
 function zoomEstimado(region: Region) {
   const anchoDp = Dimensions.get("window").width;
   return Math.round(
@@ -109,7 +116,6 @@ function zoomEstimado(region: Region) {
     ),
   );
 }
-
 function bboxVisible(region: Region) {
   const sur = Math.max(-90, region.latitude - region.latitudeDelta / 2);
   const oeste = Math.max(-180, region.longitude - region.longitudeDelta / 2);
@@ -119,13 +125,11 @@ function bboxVisible(region: Region) {
     .map((value) => value.toFixed(6))
     .join(",");
 }
-
 function valor(value: unknown, fallback = "No informado") {
   return value === null || value === undefined || value === ""
     ? fallback
     : String(value);
 }
-
 function colorPerfilRuta(perfil: string): string {
   switch (perfil) {
     case "menor_riesgo":
@@ -138,7 +142,6 @@ function colorPerfilRuta(perfil: string): string {
       return "#64748b";
   }
 }
-
 function nombrePerfilRuta(ruta: RutaAlternativa): string {
   if (ruta.nombre_perfil_ruta) {
     return ruta.nombre_perfil_ruta;
@@ -154,7 +157,6 @@ function nombrePerfilRuta(ruta: RutaAlternativa): string {
       return "Ruta alternativa";
   }
 }
-
 function formatearDistancia(distancia: number | undefined): string {
   if (distancia === undefined || !Number.isFinite(distancia)) {
     return "No disponible";
@@ -163,7 +165,6 @@ function formatearDistancia(distancia: number | undefined): string {
     ? `${(distancia / 1000).toFixed(2)} km`
     : `${Math.round(distancia)} m`;
 }
-
 function FichaElemento({
   elemento,
   cerrar,
@@ -202,14 +203,12 @@ function FichaElemento({
             ["Nodo inicio", elemento.datos.nodo_inicio],
             ["Nodo fin", elemento.datos.nodo_fin],
           ];
-
   const title =
     elemento.tipo === "zona"
       ? "Zona de riesgo"
       : elemento.tipo === "delito"
         ? "Evento delictual"
         : "Segmento peatonal";
-
   return (
     <View style={styles.infoCard}>
       <View style={styles.infoHeader}>
@@ -232,13 +231,11 @@ function FichaElemento({
     </View>
   );
 }
-
 export default function MapaRiesgo() {
   const mapRef = useRef<MapView>(null);
   const redAbort = useRef<AbortController | null>(null);
   const redConsultaKey = useRef<string | null>(null);
   const cargaId = useRef(0);
-
   const [region, setRegion] = useState(REGION_INICIAL);
   const [comuna, setComuna] = useState<string | null>(null);
   const [horario, setHorario] = useState("20:00 - 23:59");
@@ -257,46 +254,36 @@ export default function MapaRiesgo() {
   const [ubicacion, setUbicacion] = useState<PuntoRuta | null>(null);
   const [cargandoUbicacion, setCargandoUbicacion] = useState(false);
   const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
-
   const [zonaOrigenDetectada, setZonaOrigenDetectada] = useState<
     ZonaProxima<ZonaRiesgo> | null | undefined
   >(undefined);
-
   const [zonaDestinoDetectada, setZonaDestinoDetectada] = useState<
     ZonaProxima<ZonaRiesgo> | null | undefined
   >(undefined);
-
   const [modoSeleccion, setModoSeleccion] = useState<
     "origen" | "destino" | null
   >(null);
-
   const [ruta, setRuta] = useState<ResultadoRuta | null>(null);
   const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
-
   const rutaId = useRef(0);
   const rutaAbort = useRef<AbortController | null>(null);
-
   const cancelarRutaPendiente = useCallback(() => {
     rutaId.current += 1;
     rutaAbort.current?.abort();
     rutaAbort.current = null;
     setCargandoRuta(false);
   }, []);
-
   const zoom = zoomEstimado(region);
-
   const seleccionarElemento = useCallback(
     (item: ElementoMapa) => setSeleccion(item),
     [],
   );
-
   const cambiarZonas = useCallback(() => {
     setMostrarZonas((visible) => !visible);
     setSeleccion((actual) => (actual?.tipo === "zona" ? null : actual));
   }, []);
-
   const limpiarRuta = useCallback(() => {
     cancelarRutaPendiente();
     setOrigen(null);
@@ -309,7 +296,6 @@ export default function MapaRiesgo() {
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
   }, [cancelarRutaPendiente]);
-
   const elegirOrigen = useCallback(() => {
     cancelarRutaPendiente();
     setDestino(null);
@@ -321,7 +307,6 @@ export default function MapaRiesgo() {
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
   }, [cancelarRutaPendiente]);
-
   const elegirDestino = useCallback(() => {
     if (!origen) return;
     cancelarRutaPendiente();
@@ -333,37 +318,30 @@ export default function MapaRiesgo() {
     setSeleccion(null);
     setZonaDestinoDetectada(undefined);
   }, [origen, cancelarRutaPendiente]);
-
   const solicitarUbicacion = useCallback(async () => {
     setCargandoUbicacion(true);
     setEstadoUbicacion(null);
-
     try {
       const permiso = await Location.requestForegroundPermissionsAsync();
-
       if (permiso.status !== "granted") {
         setEstadoUbicacion(
           "Permiso denegado. Puedes elegir el origen o destino tocando el mapa.",
         );
         return;
       }
-
       if (!(await Location.hasServicesEnabledAsync())) {
         setEstadoUbicacion(
           "Activa la ubicación del dispositivo o selecciona un punto manualmente en el mapa.",
         );
         return;
       }
-
       const posicion = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-
       const punto = {
         latitud: posicion.coords.latitude,
         longitud: posicion.coords.longitude,
       };
-
       if (
         !Number.isFinite(punto.latitud) ||
         !Number.isFinite(punto.longitud)
@@ -373,12 +351,10 @@ export default function MapaRiesgo() {
         );
         return;
       }
-
       setUbicacion(punto);
       cancelarRutaPendiente();
       setOrigen(punto);
       setDestino(null);
-
       setZonaOrigenDetectada(
         analizarPuntoSeleccionado(
           {
@@ -388,13 +364,11 @@ export default function MapaRiesgo() {
           zonas,
         ).zonaProxima,
       );
-
       setZonaDestinoDetectada(undefined);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
       setModoSeleccion("destino");
-
       mapRef.current?.animateToRegion(
         {
           latitude: punto.latitud,
@@ -404,7 +378,6 @@ export default function MapaRiesgo() {
         },
         800,
       );
-
       setEstadoUbicacion(
         "Ubicación actual establecida como origen. Elige o busca un destino.",
       );
@@ -413,7 +386,6 @@ export default function MapaRiesgo() {
         reason instanceof Error
           ? reason.message
           : "No fue posible obtener la ubicación.";
-
       setEstadoUbicacion(
         `${detail} Puedes seleccionar un punto manualmente en el mapa.`,
       );
@@ -421,7 +393,6 @@ export default function MapaRiesgo() {
       setCargandoUbicacion(false);
     }
   }, [zonas, cancelarRutaPendiente]);
-
   const buscarDireccion = useCallback(
     (consulta: string, tipo: DestinoRuta) => {
       if (tipo === "destino" && !origen) {
@@ -429,7 +400,6 @@ export default function MapaRiesgo() {
           "Establece primero un origen para buscar destinos cercanos.",
         );
       }
-
       const referencia =
         tipo === "destino" && origen
           ? origen
@@ -438,12 +408,10 @@ export default function MapaRiesgo() {
               latitud: region.latitude,
               longitud: region.longitude,
             };
-
       return buscarDirecciones(API_BASE_URL, consulta, referencia);
     },
     [origen, ubicacion, region.latitude, region.longitude],
   );
-
   const seleccionarDireccion = useCallback(
     (tipo: DestinoRuta, resultado: ResultadoDireccion) => {
       if (tipo === "destino" && !origen) {
@@ -452,14 +420,11 @@ export default function MapaRiesgo() {
         );
         return;
       }
-
       cancelarRutaPendiente();
-
       const punto = {
         latitud: resultado.latitud,
         longitud: resultado.longitud,
       };
-
       const { zonaProxima } = analizarPuntoSeleccionado(
         {
           latitude: punto.latitud,
@@ -467,12 +432,10 @@ export default function MapaRiesgo() {
         },
         zonas,
       );
-
       setSeleccion(null);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
-
       if (tipo === "origen") {
         setOrigen(punto);
         setDestino(null);
@@ -484,7 +447,6 @@ export default function MapaRiesgo() {
         setZonaDestinoDetectada(zonaProxima);
         setModoSeleccion(null);
       }
-
       mapRef.current?.animateToRegion(
         {
           latitude: punto.latitud,
@@ -497,7 +459,6 @@ export default function MapaRiesgo() {
     },
     [origen, zonas, cancelarRutaPendiente],
   );
-
   const seleccionarPuntoMapa = useCallback(
     (event: {
       nativeEvent: {
@@ -508,20 +469,16 @@ export default function MapaRiesgo() {
       };
     }) => {
       if (!modoSeleccion) return;
-
       cancelarRutaPendiente();
-
       const { latitude, longitude } = event.nativeEvent.coordinate;
       const { punto, zonaProxima } = analizarPuntoSeleccionado(
         { latitude, longitude },
         zonas,
       );
-
       setSeleccion(null);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
-
       if (modoSeleccion === "origen") {
         setOrigen(punto);
         setDestino(null);
@@ -536,12 +493,10 @@ export default function MapaRiesgo() {
     },
     [modoSeleccion, zonas, cancelarRutaPendiente],
   );
-
   useEffect(() => {
     const id = ++rutaId.current;
     rutaAbort.current?.abort();
     rutaAbort.current = null;
-
     if (!origen || !destino) {
       setRuta(null);
       setRutaSeleccionada(null);
@@ -549,12 +504,10 @@ export default function MapaRiesgo() {
       setCargandoRuta(false);
       return;
     }
-
     const controller = new AbortController();
     rutaAbort.current = controller;
     setRuta(null);
     setRutaSeleccionada(null);
-
     const params = new URLSearchParams({
       origen_lat: String(origen.latitud),
       origen_lon: String(origen.longitud),
@@ -562,41 +515,32 @@ export default function MapaRiesgo() {
       destino_lon: String(destino.longitud),
       rango_horario: horario,
     });
-
     if (comuna) {
       params.set("comuna", comuna);
     }
-
     setCargandoRuta(true);
     setErrorRuta(null);
-
     void (async () => {
       try {
         const response = await fetch(
           `${API_BASE_URL}/api/rutas/alternativas?${params.toString()}`,
           { signal: controller.signal },
         );
-
         if (!response.ok) {
           throw new Error(
             `No se pudieron calcular las rutas (HTTP ${response.status}).`,
           );
         }
-
         const result = (await response.json()) as ResultadoRuta;
-
         if (id !== rutaId.current) return;
-
         const rutasNormalizadas = (result.rutas ?? []).map((alternativa) => ({
           ...alternativa,
           geometria: normalizarGeometria(alternativa.geometria),
         }));
-
         setRuta({
           ...result,
           rutas: rutasNormalizadas,
         });
-
         if (
           result.encontrada === false ||
           rutasNormalizadas.length === 0
@@ -609,7 +553,6 @@ export default function MapaRiesgo() {
         }
       } catch (reason) {
         if (controller.signal.aborted || id !== rutaId.current) return;
-
         setErrorRuta(
           reason instanceof Error
             ? reason.message
@@ -621,7 +564,6 @@ export default function MapaRiesgo() {
         }
       }
     })();
-
     return () => {
       controller.abort();
       if (rutaAbort.current === controller) {
@@ -629,25 +571,20 @@ export default function MapaRiesgo() {
       }
     };
   }, [origen, destino, horario, comuna]);
-
   useEffect(() => {
     if (ruta?.encontrada === false) return;
-
     const alternativasParaEncuadrar = (ruta?.rutas ?? []).filter(
       (alternativa) =>
         rutaSeleccionada === null ||
         alternativa.perfil_ruta === rutaSeleccionada,
     );
-
     const coordenadas: Array<[number, number]> =
       alternativasParaEncuadrar.flatMap((alternativa) =>
         Array.isArray(alternativa.geometria)
           ? (alternativa.geometria as Array<[number, number]>)
           : [],
       );
-
     if (coordenadas.length < 2) return;
-
     mapRef.current?.fitToCoordinates(
       coordenadas.map(([latitude, longitude]) => ({
         latitude,
@@ -664,18 +601,13 @@ export default function MapaRiesgo() {
       },
     );
   }, [ruta, rutaSeleccionada]);
-
   useEffect(() => {
     if (!RANGOS_HORARIOS.includes(horario)) return;
-
     const id = ++cargaId.current;
     const controller = new AbortController();
-
     setCargando(true);
     setError(null);
-
     const query = `rango_horario=${encodeURIComponent(horario)}`;
-
     const cargar = async () => {
       try {
         const [respuestasZonas, respuestaDelitos] = await Promise.all([
@@ -691,18 +623,15 @@ export default function MapaRiesgo() {
             signal: controller.signal,
           }),
         ]);
-
         const errorResponse = [
           ...respuestasZonas,
           respuestaDelitos,
         ].find((res) => !res.ok);
-
         if (errorResponse) {
           throw new Error(
             `Error del backend (HTTP ${errorResponse.status})`,
           );
         }
-
         const [resultadosZonas, resultadoDelitos] = await Promise.all([
           Promise.all(
             respuestasZonas.map(
@@ -711,9 +640,7 @@ export default function MapaRiesgo() {
           ),
           respuestaDelitos.json() as Promise<Carga<Delito>>,
         ]);
-
         if (id !== cargaId.current) return;
-
         setZonas(
           resultadosZonas.flatMap((result, index) =>
             (result.data ?? []).map((zona) => ({
@@ -722,11 +649,9 @@ export default function MapaRiesgo() {
             })),
           ),
         );
-
         setDelitos(resultadoDelitos.data ?? []);
       } catch (reason) {
         if (controller.signal.aborted || id !== cargaId.current) return;
-
         setError(
           reason instanceof Error
             ? reason.message
@@ -738,14 +663,11 @@ export default function MapaRiesgo() {
         }
       }
     };
-
     void cargar();
     return () => controller.abort();
   }, [horario]);
-
   const bbox = bboxVisible(region);
   const zoomSuficiente = zoom >= 12;
-
   useEffect(() => {
     if (!mostrarRed || !comuna || !zoomSuficiente) {
       redAbort.current?.abort();
@@ -755,9 +677,7 @@ export default function MapaRiesgo() {
       setCargandoRed(false);
       return;
     }
-
     const consultaKey = `${comuna}|${bbox}`;
-
     if (
       redConsultaKey.current === consultaKey &&
       redAbort.current &&
@@ -765,42 +685,32 @@ export default function MapaRiesgo() {
     ) {
       return;
     }
-
     redAbort.current?.abort();
-
     const controller = new AbortController();
     redAbort.current = controller;
     redConsultaKey.current = consultaKey;
-
     setSegmentos([]);
     setCargandoRed(true);
     setError(null);
-
     const timer = setTimeout(async () => {
       try {
         const params = new URLSearchParams({ comuna, bbox });
-
         const response = await fetch(
           `${API_BASE_URL}/api/geografia/red-peatonal?${params.toString()}`,
           { signal: controller.signal },
         );
-
         if (!response.ok) {
           throw new Error(
             `Error red peatonal (HTTP ${response.status})`,
           );
         }
-
         const result = (await response.json()) as Carga<SegmentoPeatonal>;
-
         if (!controller.signal.aborted) {
           setSegmentos(result.data ?? []);
         }
       } catch (reason) {
         if (controller.signal.aborted) return;
-
         setSegmentos([]);
-
         setError(
           reason instanceof Error
             ? reason.message
@@ -812,40 +722,33 @@ export default function MapaRiesgo() {
         }
       }
     }, 400);
-
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
   }, [bbox, comuna, mostrarRed, zoomSuficiente]);
-
   const cambiarComuna = useCallback((nombre: string | null) => {
     setSegmentos([]);
     setComuna(nombre);
     setSeleccion(null);
   }, []);
-
   const zonasVisibles = zonas.filter((zona) =>
     estaEnVista(zona.latitud, zona.longitud, region),
   );
-
   const delitosVisibles =
     mostrarDelitos && zoom >= 13
       ? delitos.filter((delito) =>
           estaEnVista(delito.latitud, delito.longitud, region),
         )
       : [];
-
   const rutasParaDibujar = (ruta?.rutas ?? []).filter(
     (alternativa) =>
       rutaSeleccionada === null ||
       alternativa.perfil_ruta === rutaSeleccionada,
   );
-
   const clavePuntosRuta = origen && destino
     ? `${origen.latitud},${origen.longitud}:${destino.latitud},${destino.longitud}`
     : "sin-puntos";
-
   return (
     <View style={styles.container}>
       <MapView
@@ -868,7 +771,6 @@ export default function MapaRiesgo() {
             onSeleccionar={seleccionarElemento}
           />
         )}
-
         {mostrarZonas && (
           <CapaZonasRiesgo
             zonas={zonasVisibles}
@@ -888,23 +790,19 @@ export default function MapaRiesgo() {
             habilitarSeleccionZona={!modoSeleccion}
           />
         )}
-
         {delitosVisibles.length > 0 && (
           <CapaDelitos
             delitos={delitosVisibles}
             onSeleccionar={seleccionarElemento}
           />
         )}
-
         {[...rutasParaDibujar]
           .reverse()
           .map((alternativa) => {
             const geometria = Array.isArray(alternativa.geometria)
               ? (alternativa.geometria as Array<[number, number]>)
               : [];
-
             if (geometria.length < 2) return null;
-
             return (
               <Polyline
                 key={`${clavePuntosRuta}-${alternativa.perfil_ruta}-${rutaSeleccionada ?? "todas"}`}
@@ -917,14 +815,12 @@ export default function MapaRiesgo() {
               />
             );
           })}
-
         <CapaPuntosRuta
           origen={origen}
           destino={destino}
           ubicacion={ubicacion}
         />
       </MapView>
-
       <ControlesMapa
         origen={origen}
         destino={destino}
@@ -962,13 +858,11 @@ export default function MapaRiesgo() {
         onBuscarDireccion={buscarDireccion}
         onSeleccionarDireccion={seleccionarDireccion}
       />
-
       {cargando && (
         <View pointerEvents="none" style={styles.loading}>
           <ActivityIndicator size="small" color="#1d4ed8" />
         </View>
       )}
-
       {cargandoRuta && (
         <View
           pointerEvents="none"
@@ -977,14 +871,12 @@ export default function MapaRiesgo() {
           <ActivityIndicator size="small" color="#16a34a" />
         </View>
       )}
-
       {seleccion && (
         <FichaElemento
           elemento={seleccion}
           cerrar={() => setSeleccion(null)}
         />
       )}
-
       {(zonaOrigenDetectada || zonaDestinoDetectada) &&
         !seleccion &&
         !cargandoRuta &&
@@ -1005,7 +897,6 @@ export default function MapaRiesgo() {
                 {`Origen: zona ${zonaOrigenDetectada.zona.nivel} a ${Math.round(zonaOrigenDetectada.distanciaMetros)} m`}
               </Text>
             )}
-
             {zonaDestinoDetectada && (
               <Text
                 style={[
@@ -1018,12 +909,10 @@ export default function MapaRiesgo() {
             )}
           </View>
         )}
-
       {(ruta || errorRuta || (origen && destino && cargandoRuta)) &&
         !seleccion && (
           <View style={styles.routeCard}>
             <Text style={styles.routeTitle}>Alternativas de ruta</Text>
-
             <ScrollView
               style={styles.routeList}
               contentContainerStyle={styles.routeListContent}
@@ -1040,7 +929,6 @@ export default function MapaRiesgo() {
                   </Text>
                 </View>
               )}
-
               {!cargandoRuta && errorRuta && (
                 <Text
                   accessibilityLiveRegion="assertive"
@@ -1049,7 +937,6 @@ export default function MapaRiesgo() {
                   {errorRuta}
                 </Text>
               )}
-
               {!cargandoRuta &&
                 !errorRuta &&
                 (ruta?.rutas ?? []).length > 0 && (
@@ -1062,7 +949,6 @@ export default function MapaRiesgo() {
                     alternativas. Selecciona una para mostrar solo esa ruta.
                   </Text>
                 )}
-
               {!cargandoRuta &&
                 !errorRuta &&
                 (ruta?.rutas?.length ?? 0) > 0 &&
@@ -1076,14 +962,96 @@ export default function MapaRiesgo() {
                     </Text>
                   </View>
                 )}
+              {!cargandoRuta &&
+                !errorRuta &&
+                ruta?.interpretacion_ia?.disponible === true && (
+                  <View style={styles.aiCard}>
+                    <Text style={styles.aiEyebrow}>ANÁLISIS DE IA</Text>
+                    <Text style={styles.aiTitle}>
+                      Recomendación de RutaSegura
+                    </Text>
 
+                    {ruta.interpretacion_ia.recomendacion && (
+                      <View style={styles.aiRecommendation}>
+                        <Text style={styles.aiSectionTitle}>
+                          Ruta recomendada
+                        </Text>
+                        <Text style={styles.aiRecommendationName}>
+                          {(ruta.rutas ?? []).find(
+                            (alternativa) =>
+                              alternativa.perfil_ruta ===
+                              ruta.interpretacion_ia?.recomendacion?.perfil_ruta,
+                          )
+                            ? nombrePerfilRuta(
+                                (ruta.rutas ?? []).find(
+                                  (alternativa) =>
+                                    alternativa.perfil_ruta ===
+                                    ruta.interpretacion_ia?.recomendacion?.perfil_ruta,
+                                )!,
+                              )
+                            : ruta.interpretacion_ia.recomendacion.perfil_ruta}
+                        </Text>
+                        <Text style={styles.aiBody}>
+                          {ruta.interpretacion_ia.recomendacion.motivo}
+                        </Text>
+                      </View>
+                    )}
+
+                    {!!ruta.interpretacion_ia.resumen_general && (
+                      <>
+                        <Text style={styles.aiSectionTitle}>
+                          Resumen general
+                        </Text>
+                        <Text style={styles.aiBody}>
+                          {ruta.interpretacion_ia.resumen_general}
+                        </Text>
+                      </>
+                    )}
+
+                    {!!ruta.interpretacion_ia.consideraciones?.length && (
+                      <>
+                        <Text style={styles.aiSectionTitle}>
+                          Consideraciones
+                        </Text>
+                        {ruta.interpretacion_ia.consideraciones.map(
+                          (consideracion, index) => (
+                            <Text
+                              key={`${index}-${consideracion}`}
+                              style={styles.aiConsideration}
+                            >
+                              {`• ${consideracion}`}
+                            </Text>
+                          ),
+                        )}
+                      </>
+                    )}
+                  </View>
+                )}
+              {!cargandoRuta &&
+                !errorRuta &&
+                ruta?.interpretacion_ia?.disponible === false && (
+                  <View style={styles.aiUnavailable}>
+                    <Text style={styles.aiUnavailableText}>
+                      {ruta.interpretacion_ia.mensaje ??
+                        "La interpretación de IA no está disponible. Puedes consultar las rutas igualmente."}
+                    </Text>
+                  </View>
+                )}
               {!cargandoRuta &&
                 !errorRuta &&
                 (ruta?.rutas ?? []).map((alternativa) => {
                   const color = colorPerfilRuta(alternativa.perfil_ruta);
                   const seleccionada =
                     rutaSeleccionada === alternativa.perfil_ruta;
-
+                  const recomendadaPorIA =
+                    ruta?.interpretacion_ia?.disponible === true &&
+                    ruta.interpretacion_ia.recomendacion?.perfil_ruta ===
+                      alternativa.perfil_ruta;
+                  const comparacionIA =
+                    ruta?.interpretacion_ia?.comparaciones?.find(
+                      (comparacion) =>
+                        comparacion.perfil_ruta === alternativa.perfil_ruta,
+                    );
                   return (
                     <Pressable
                       key={alternativa.perfil_ruta}
@@ -1107,19 +1075,21 @@ export default function MapaRiesgo() {
                         <Text style={[styles.alternativeTitle, { color }]}>
                           {nombrePerfilRuta(alternativa)}
                         </Text>
-
+                        {recomendadaPorIA && (
+                          <Text style={styles.aiRecommendedBadge}>
+                            Recomendada por IA
+                          </Text>
+                        )}
                         {seleccionada && (
                           <Text style={[styles.selectedRouteLabel, { color }]}>
                             ✓ Seleccionada
                           </Text>
                         )}
                       </View>
-
                       <Text style={styles.routeLine}>
                         Distancia:{" "}
                         {formatearDistancia(alternativa.distancia_metros)}
                       </Text>
-
                       <Text style={styles.routeLine}>
                         Tiempo estimado:{" "}
                         {alternativa.tiempo_estimado_minutos !== undefined &&
@@ -1129,12 +1099,10 @@ export default function MapaRiesgo() {
                           ? `${alternativa.tiempo_estimado_minutos.toFixed(1)} min`
                           : "No disponible"}
                       </Text>
-
                       <Text style={styles.routeLine}>
                         Nivel de riesgo:{" "}
                         {alternativa.nivel_riesgo ?? "No informado"}
                       </Text>
-
                       <Text style={styles.routeLine}>
                         Puntaje de riesgo:{" "}
                         {alternativa.puntaje_riesgo !== undefined &&
@@ -1142,6 +1110,16 @@ export default function MapaRiesgo() {
                           ? alternativa.puntaje_riesgo.toFixed(2)
                           : "No disponible"}
                       </Text>
+                      {!!comparacionIA?.explicacion && (
+                        <View style={styles.aiComparison}>
+                          <Text style={styles.aiComparisonTitle}>
+                            Análisis de esta ruta
+                          </Text>
+                          <Text style={styles.aiBody}>
+                            {comparacionIA.explicacion}
+                          </Text>
+                        </View>
+                      )}
                     </Pressable>
                   );
                 })}
@@ -1151,7 +1129,6 @@ export default function MapaRiesgo() {
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1232,6 +1209,98 @@ const styles = StyleSheet.create({
     color: "#4b5563",
     fontSize: 12,
     marginBottom: 4,
+  },
+  aiCard: {
+    backgroundColor: "#eff6ff",
+    borderColor: "#bfdbfe",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 7,
+    marginBottom: 5,
+  },
+  aiEyebrow: {
+    color: "#1d4ed8",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.7,
+  },
+  aiTitle: {
+    color: "#111827",
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 3,
+    marginBottom: 5,
+  },
+  aiRecommendation: {
+    backgroundColor: "#ffffff",
+    borderRadius: 7,
+    borderLeftWidth: 3,
+    borderLeftColor: "#2563eb",
+    padding: 8,
+    marginBottom: 5,
+  },
+  aiSectionTitle: {
+    color: "#111827",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  aiRecommendationName: {
+    color: "#1d4ed8",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  aiBody: {
+    color: "#374151",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  aiConsideration: {
+    color: "#374151",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  aiRecommendedBadge: {
+    color: "#15803d",
+    backgroundColor: "#dcfce7",
+    overflow: "hidden",
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 3,
+    alignSelf: "flex-start",
+  },
+  aiComparison: {
+    borderTopWidth: 1,
+    borderTopColor: "#dbeafe",
+    paddingTop: 6,
+    marginTop: 7,
+  },
+  aiComparisonTitle: {
+    color: "#111827",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  aiUnavailable: {
+    backgroundColor: "#fff7ed",
+    borderColor: "#fed7aa",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  aiUnavailableText: {
+    color: "#9a3412",
+    fontSize: 12,
+    lineHeight: 17,
   },
   routeWarning: {
     backgroundColor: "#fff7ed",

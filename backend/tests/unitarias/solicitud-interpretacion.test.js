@@ -60,7 +60,7 @@ describe("construirSolicitudInterpretacionRutas", () => {
       INSTRUCCIONES_INTERPRETACION_RUTAS
     );
 
-    expect(solicitud.maxOutputTokens).toBe(350);
+    expect(solicitud.maxOutputTokens).toBe(600);
 
     expect(entrada.comuna).toBe("Viña del Mar");
     expect(entrada.cantidad_rutas).toBe(2);

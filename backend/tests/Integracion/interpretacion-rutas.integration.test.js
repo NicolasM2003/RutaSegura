@@ -62,6 +62,12 @@ describe("Integración del servicio de interpretación de rutas", () => {
       resumen_general:
         "Las rutas presentan diferentes distancias y niveles de riesgo.",
 
+      recomendacion: {
+        perfil_ruta: "menor_riesgo",
+        motivo:
+          "Presenta el menor puntaje de riesgo entre las alternativas recibidas.",
+      },
+
       comparaciones: [
         {
           perfil_ruta: "menor_riesgo",
@@ -107,9 +113,12 @@ describe("Integración del servicio de interpretación de rutas", () => {
     // Se utiliza el modelo configurado.
     expect(solicitud.model).toBe("gpt-4o-mini");
 
+    expect(solicitud.text.format.type).toBe("json_schema");
+    expect(solicitud.text.format.name).toBe("interpretacion_rutas");
+
     // La solicitud contiene las instrucciones y el contexto.
     expect(solicitud.instructions).toContain("RutaSegura");
-    expect(solicitud.max_output_tokens).toBe(350);
+    expect(solicitud.max_output_tokens).toBe(600);
 
     const contextoEnviado = JSON.parse(solicitud.input);
 

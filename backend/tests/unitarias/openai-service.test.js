@@ -34,22 +34,36 @@ describe("solicitarRespuestaOpenAI", () => {
       entrada: "Datos de prueba",
     });
 
+    // Configuración del cliente OpenAI.
     expect(OpenAI).toHaveBeenCalledWith({
       apiKey: "test-api-key",
       timeout: 12000,
       maxRetries: 0,
     });
+
+    // Parámetros enviados a la API Responses.
+    expect(mockResponsesCreate).toHaveBeenCalledWith({
+      model: "gpt-4o-mini",
+      instructions: "Interpreta las rutas.",
+      input: "Datos de prueba",
+      max_output_tokens: 300,
+      text: {
+        format: expect.objectContaining({
+          type: "json_schema",
+          name: "interpretacion_rutas",
+          strict: true,
+        }),
+      },
+    });
   });
 
   test("debe identificar un timeout", async () => {
-    const error = Object.assign(
-      new Error("Request timed out"),
-      {
-        name: "APIConnectionTimeoutError",
-      }
+    mockResponsesCreate.mockRejectedValue(
+      Object.assign(
+        new Error("Request timed out"),
+        { name: "APIConnectionTimeoutError" }
+      )
     );
-
-    mockResponsesCreate.mockRejectedValue(error);
 
     await expect(
       solicitarRespuestaOpenAI({
@@ -59,8 +73,6 @@ describe("solicitarRespuestaOpenAI", () => {
     ).rejects.toMatchObject({
       name: "OpenAIServiceError",
       code: "OPENAI_TIMEOUT",
-      message:
-        "La solicitud a OpenAI excedió el tiempo máximo de espera.",
     });
   });
 
@@ -104,9 +116,10 @@ describe("solicitarRespuestaOpenAI", () => {
 
   test("debe identificar un error temporal del servidor", async () => {
     mockResponsesCreate.mockRejectedValue(
-      Object.assign(new Error("Internal server error"), {
-        status: 500,
-      })
+      Object.assign(
+        new Error("Internal server error"),
+        { status: 500 }
+      )
     );
 
     await expect(

@@ -52,6 +52,12 @@ describe("interpretarRutasAlternativas", () => {
       resumen_general:
         "Las rutas presentan diferentes distancias y niveles de riesgo.",
 
+      recomendacion:{
+        perfil_ruta: "menor_riesgo",
+          motivo:
+        "Presenta el menor puntaje de riesgo entre las alternativas recibidas.",
+      },
+
       comparaciones: [
         {
           perfil_ruta: "menor_riesgo",
@@ -84,7 +90,7 @@ describe("interpretarRutasAlternativas", () => {
 
     const [solicitud] = solicitarRespuesta.mock.calls[0];
 
-    expect(solicitud.maxOutputTokens).toBe(350);
+    expect(solicitud.maxOutputTokens).toBe(600);
 
     const contextoEnviado = JSON.parse(solicitud.entrada);
 

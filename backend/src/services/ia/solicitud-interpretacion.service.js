@@ -24,20 +24,54 @@ REGLAS:
 7. Si falta información, indícalo sin inventarla.
 8. Responde en español, de forma clara y concisa.
 9. Cada ruta debe aparecer exactamente una vez en las comparaciones.
-10. Utiliza el perfil_ruta exacto que aparece en los datos recibidos.
+110. Debes recomendar exactamente una de las rutas recibidas.
 
+11. El perfil recomendado debe coincidir exactamente con un
+perfil_ruta de los datos recibidos.
+
+12. RutaSegura prioriza la seguridad peatonal. Para recomendar,
+considera primero el puntaje de riesgo y después la distancia
+y el tiempo de recorrido.
+
+13. Un puntaje de riesgo menor representa un riesgo relativo
+menor entre las alternativas comparadas. No confundas el nivel
+de riesgo categórico con el puntaje numérico: dos rutas con
+nivel "Medio" pueden tener puntajes distintos.
+
+14. Si una ruta tiene un puntaje de riesgo menor y las otras
+alternativas solo ofrecen mejoras marginales en distancia o
+tiempo, recomienda la de menor riesgo.
+
+15. Si recomiendas una alternativa con mayor puntaje de riesgo,
+justifica claramente por qué su reducción de distancia o tiempo
+compensa esa diferencia. No inventes umbrales numéricos.
+
+16. En las explicaciones, utiliza los valores concretos
+disponibles para comparar las alternativas. No describas un
+puntaje como favorable sin indicar respecto de qué ruta.
+
+17. No elijas automáticamente la ruta más corta ni afirmes
+que una ruta es completamente segura.
+
+18. Si las alternativas presentan diferencias mínimas o los
+datos no permiten una conclusión clara, indícalo y explica
+las limitaciones de la recomendación.
 FORMATO DE RESPUESTA:
 Devuelve únicamente un objeto JSON válido con esta estructura:
 {
-  "resumen_general": "Resumen de la comparación",
+  "resumen_general": "Resumen de la comparación entre alternativas.",
+  "recomendacion": {
+    "perfil_ruta": "identificador exacto de una ruta recibida",
+    "motivo": "Motivo de la recomendación basado en las métricas."
+  },
   "comparaciones": [
     {
-      "perfil_ruta": "Identificador del perfil recibido",
-      "explicacion": "Explicación de esta alternativa"
+      "perfil_ruta": "identificador de una ruta recibida",
+      "explicacion": "Explicación de las ventajas y desventajas."
     }
   ],
   "consideraciones": [
-    "Advertencia o limitación relevante"
+    "Limitación o advertencia relevante."
   ]
 }
 
@@ -90,7 +124,7 @@ const contexto = {
   return {
     instrucciones: INSTRUCCIONES_INTERPRETACION_RUTAS,
     entrada: JSON.stringify(contexto),
-    maxOutputTokens: 350,
+    maxOutputTokens: 600,
   };
 };
 

@@ -10,6 +10,12 @@ describe("validarRespuestaModelo", () => {
       resumen_general:
         "Las alternativas presentan diferencias de distancia y riesgo.",
 
+      recomendacion: {
+        perfil_ruta: "menor_riesgo",
+        motivo:
+          "Presenta el menor puntaje de riesgo entre las alternativas.",
+      },
+
       comparaciones: [
         {
           perfil_ruta: "menor_riesgo",
@@ -38,6 +44,12 @@ describe("validarRespuestaModelo", () => {
     expect(resultado.resumen_general).toContain(
       "diferencias de distancia y riesgo"
     );
+
+    expect(resultado.recomendacion).toEqual({
+      perfil_ruta: "menor_riesgo",
+      motivo:
+        "Presenta el menor puntaje de riesgo entre las alternativas.",
+    });
 
     expect(resultado.comparaciones).toHaveLength(2);
 
@@ -80,12 +92,19 @@ describe("validarRespuestaModelo", () => {
     const respuesta = {
       output_text: JSON.stringify({
         resumen_general: "Resumen válido.",
+
+        recomendacion: {
+          perfil_ruta: "menor_riesgo",
+          motivo: "Tiene el menor puntaje de riesgo.",
+        },
+
         comparaciones: [
           {
             perfil_ruta: "menor_riesgo",
             explicacion: "Explicación válida.",
           },
         ],
+
         consideraciones: [],
       }),
     };
@@ -99,7 +118,7 @@ describe("validarRespuestaModelo", () => {
     );
   });
 
-  test("debe rechazar un perfil inventado", () => {
+  test("debe rechazar un perfil inventado en las comparaciones", () => {
     const datos = JSON.parse(respuestaValida.output_text);
 
     datos.comparaciones[0].perfil_ruta =
@@ -117,7 +136,7 @@ describe("validarRespuestaModelo", () => {
     );
   });
 
-  test("debe rechazar un perfil duplicado", () => {
+  test("debe rechazar un perfil duplicado en las comparaciones", () => {
     const datos = JSON.parse(respuestaValida.output_text);
 
     datos.comparaciones[1].perfil_ruta =
@@ -131,6 +150,24 @@ describe("validarRespuestaModelo", () => {
     ).toThrow(
       expect.objectContaining({
         code: "IA_PERFIL_INVALIDO",
+      })
+    );
+  });
+
+  test("debe rechazar una recomendación que no corresponda a una ruta existente", () => {
+    const datos = JSON.parse(respuestaValida.output_text);
+
+    datos.recomendacion.perfil_ruta =
+      "ruta_inexistente";
+
+    expect(() =>
+      validarRespuestaModelo(
+        { output_text: JSON.stringify(datos) },
+        perfiles
+      )
+    ).toThrow(
+      expect.objectContaining({
+        code: "IA_PERFIL_RECOMENDADO_INVALIDO",
       })
     );
   });

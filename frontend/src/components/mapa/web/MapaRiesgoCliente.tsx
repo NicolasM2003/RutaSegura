@@ -162,6 +162,85 @@ export function normalizarGeometriaRuta(
     );
 }
 
+function AjustarVistaRutas({
+  ruta,
+  origen,
+  destino,
+}: {
+  ruta: any;
+  origen: { latitud: number; longitud: number } | null;
+  destino: { latitud: number; longitud: number } | null;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (
+      !ruta?.encontrada ||
+      !Array.isArray(ruta.rutas) ||
+      ruta.rutas.length === 0 ||
+      !origen ||
+      !destino
+    ) {
+      return;
+    }
+
+    const coordenadas: [number, number][] = [
+      [origen.latitud, origen.longitud],
+      [destino.latitud, destino.longitud],
+    ];
+
+    for (const alternativa of ruta.rutas) {
+      coordenadas.push(
+        ...normalizarGeometriaRuta(
+          alternativa.geometria,
+        ),
+      );
+    }
+
+    const puntosValidos = coordenadas.filter(
+      ([latitud, longitud]) =>
+        Number.isFinite(latitud) &&
+        Number.isFinite(longitud) &&
+        latitud >= -90 &&
+        latitud <= 90 &&
+        longitud >= -180 &&
+        longitud <= 180,
+    );
+
+    if (puntosValidos.length < 2) {
+      return;
+    }
+
+    const latitudes = puntosValidos.map(
+      ([latitud]) => latitud,
+    );
+
+    const longitudes = puntosValidos.map(
+      ([, longitud]) => longitud,
+    );
+
+    const limites = [
+      [
+        Math.min(...latitudes),
+        Math.min(...longitudes),
+      ],
+      [
+        Math.max(...latitudes),
+        Math.max(...longitudes),
+      ],
+    ] as [[number, number], [number, number]];
+
+    map.fitBounds(limites, {
+      padding: [50, 50],
+      maxZoom: 16,
+      animate: true,
+      duration: 0.6,
+    });
+  }, [map, ruta, origen, destino]);
+
+  return null;
+}
+
 export function formatearDistancia(metros: number) {
   if (metros >= 1000) {
     return `${(metros / 1000).toFixed(2)} km`;
@@ -176,7 +255,7 @@ export default function MapaRiesgoClient() {
   const [redPeatonal, setRedPeatonal] = useState<any[]>([]);
   const [comunaRedPeatonal, setComunaRedPeatonal] =
     useState("Viña del Mar");
-  const [mostrarRedPeatonal, setMostrarRedPeatonal] = useState(true);
+  const [mostrarRedPeatonal, setMostrarRedPeatonal] = useState(false);
   const [mostrarZonasRiesgo, setMostrarZonasRiesgo] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
   const [cargandoRedPeatonal, setCargandoRedPeatonal] = useState(false);
@@ -252,6 +331,7 @@ export default function MapaRiesgoClient() {
     tipo: DestinoRuta,
     latitud: number,
     longitud: number,
+    centrarEnMapa = false,
   ): boolean => {
     const punto = { latitud, longitud };
 
@@ -271,7 +351,7 @@ export default function MapaRiesgoClient() {
     }
 
     cancelarRutaPendiente();
-    setPuntoParaCentrar(punto);
+    setPuntoParaCentrar(centrarEnMapa ? punto : null);
     setRuta(null);
     setRutaSeleccionada(null);
     setErrorRuta(null);
@@ -299,7 +379,7 @@ export default function MapaRiesgoClient() {
         };
 
         setUbicacionActual(punto);
-        seleccionarPunto("origen", punto.latitud, punto.longitud);
+        seleccionarPunto("origen", punto.latitud, punto.longitud, true,);
         setEstadoUbicacion("Ubicación actual establecida como origen.");
         setBuscandoUbicacion(false);
       },
@@ -518,6 +598,13 @@ export default function MapaRiesgoClient() {
   ]);
 
   useEffect(() => {
+    if (!mostrarRedPeatonal) {
+    setRedPeatonal([]);
+    setCargandoRedPeatonal(false);
+    setErrorRedPeatonal(false);
+    return;
+  }
+
     if (!bbox) {
       return;
     }
@@ -589,7 +676,7 @@ export default function MapaRiesgoClient() {
     return () => {
       controlador.abort();
     };
-  }, [comunaRedPeatonal, bbox, zoom]);
+  }, [mostrarRedPeatonal, comunaRedPeatonal, bbox, zoom]);
 
   return (
     <div
@@ -622,6 +709,12 @@ export default function MapaRiesgoClient() {
         />
 
         <CentrarPunto punto={puntoParaCentrar} />
+
+        <AjustarVistaRutas
+          ruta={ruta}
+          origen={origen}
+          destino={destino}
+        />
 
         {ubicacionActual && (
           <CircleMarker
@@ -842,7 +935,7 @@ export default function MapaRiesgoClient() {
             boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
           }}
         >
-          Calculando ruta...
+          Calculando rutas y preparando la recomendación de IA...
         </div>
       )}
 
@@ -875,12 +968,12 @@ export default function MapaRiesgoClient() {
             zIndex: 20000,
             bottom: 20,
             right: 20,
-            width: 320,
+            width: 370,
             maxWidth: "calc(100% - 32px)",
-            maxHeight: "45%",
+            maxHeight: "70%",
             overflowY: "auto",
-            background: "rgba(255,255,255,0.97)",
-            padding: "14px",
+            background: "rgba(255,255,255,0.98)",
+            padding: 14,
             borderRadius: 10,
             boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
             fontFamily: "Arial, sans-serif",
@@ -901,13 +994,14 @@ export default function MapaRiesgoClient() {
             style={{
               fontSize: 12,
               color: "#4b5563",
-              marginBottom: 8,
+              marginBottom: 12,
             }}
           >
-            Selecciona una alternativa para mostrar solo esa ruta en el mapa.
+            La IA compara las alternativas calculadas por RutaSegura.
+            Puedes seleccionar una ruta para destacarla en el mapa.
           </div>
 
-          {rutasAlternativas.length > 0 && ruta?.mensaje && (
+          {ruta.mensaje && (
             <div
               role="status"
               style={{
@@ -918,13 +1012,138 @@ export default function MapaRiesgoClient() {
                 padding: "8px 10px",
                 fontSize: 12,
                 lineHeight: 1.5,
-                marginBottom: 8,
+                marginBottom: 10,
               }}
             >
               {ruta.mensaje}
             </div>
           )}
 
+          {/* Recomendación general de la IA */}
+          {ruta.interpretacion_ia?.disponible === true && (
+            <section
+              aria-live="polite"
+              style={{
+                background: "#f0fdf4",
+                border: "1px solid #bbf7d0",
+                borderRadius: 8,
+                padding: 12,
+                marginBottom: 14,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: "bold",
+                  color: "#166534",
+                  marginBottom: 8,
+                }}
+              >
+                Recomendación de RutaSegura
+              </div>
+
+              <div
+                style={{
+                  fontSize: 15,
+                  fontWeight: "bold",
+                  marginBottom: 6,
+                }}
+              >
+                {rutasAlternativas.find(
+                  (alternativa: any) =>
+                    alternativa.perfil_ruta ===
+                    ruta.interpretacion_ia.recomendacion?.perfil_ruta,
+                )?.nombre_perfil_ruta ?? "Ruta recomendada"}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  marginBottom: 8,
+                }}
+              >
+                {ruta.interpretacion_ia.recomendacion?.motivo}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "#374151",
+                  lineHeight: 1.5,
+                  borderTop: "1px solid #bbf7d0",
+                  paddingTop: 8,
+                }}
+              >
+                {ruta.interpretacion_ia.resumen_general}
+              </div>
+
+              {Array.isArray(
+                ruta.interpretacion_ia.consideraciones,
+              ) &&
+                ruta.interpretacion_ia.consideraciones.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: "bold",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Consideraciones
+                    </div>
+
+                    {ruta.interpretacion_ia.consideraciones.map(
+                      (consideracion: string, indice: number) => (
+                        <div
+                          key={`${indice}-${consideracion}`}
+                          style={{
+                            fontSize: 12,
+                            lineHeight: 1.5,
+                            marginBottom: 4,
+                          }}
+                        >
+                          • {consideracion}
+                        </div>
+                      ),
+                    )}
+                  </div>
+                )}
+
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "#166534",
+                  marginTop: 10,
+                }}
+              >
+                Recomendación basada en las métricas disponibles.
+                No garantiza seguridad absoluta.
+              </div>
+            </section>
+          )}
+
+          {/* La IA puede fallar sin ocultar las rutas */}
+          {ruta.interpretacion_ia?.disponible === false && (
+            <div
+              role="status"
+              style={{
+                background: "#fff7ed",
+                border: "1px solid #fed7aa",
+                color: "#9a3412",
+                borderRadius: 6,
+                padding: 10,
+                marginBottom: 12,
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              {ruta.interpretacion_ia.mensaje ??
+                "No fue posible generar la recomendación automática. Las rutas siguen disponibles."}
+            </div>
+          )}
+
+          {/* Todas las alternativas siguen visibles */}
           {rutasAlternativas.map((alternativa: any) => {
             const color =
               alternativa.perfil_ruta === "menor_riesgo"
@@ -935,6 +1154,21 @@ export default function MapaRiesgoClient() {
 
             const seleccionada =
               rutaSeleccionada === alternativa.perfil_ruta;
+
+            const interpretacionDisponible =
+              ruta.interpretacion_ia?.disponible === true;
+
+            const recomendada =
+              interpretacionDisponible &&
+              ruta.interpretacion_ia.recomendacion?.perfil_ruta ===
+                alternativa.perfil_ruta;
+
+            const explicacion = interpretacionDisponible
+              ? ruta.interpretacion_ia.comparaciones?.find(
+                  (comparacion: any) =>
+                    comparacion.perfil_ruta === alternativa.perfil_ruta,
+                )?.explicacion
+              : null;
 
             return (
               <button
@@ -959,8 +1193,8 @@ export default function MapaRiesgoClient() {
                   borderRight: "1px solid #e5e7eb",
                   borderBottom: "1px solid #e5e7eb",
                   borderRadius: 6,
-                  padding: "8px 10px",
-                  marginBottom: 8,
+                  padding: "10px",
+                  marginBottom: 9,
                   background: seleccionada ? "#f0fdf4" : "#ffffff",
                   fontFamily: "inherit",
                 }}
@@ -974,19 +1208,34 @@ export default function MapaRiesgoClient() {
                     flexWrap: "wrap",
                     fontWeight: "bold",
                     fontSize: 14,
-                    marginBottom: 4,
+                    marginBottom: 7,
                   }}
                 >
                   <span>{alternativa.nombre_perfil_ruta}</span>
 
+                  {recomendada && (
+                    <span
+                      style={{
+                        color: "#166534",
+                        background: "#dcfce7",
+                        borderRadius: 20,
+                        padding: "4px 7px",
+                        fontSize: 11,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Recomendada por IA
+                    </span>
+                  )}
+
                   {seleccionada && (
                     <span style={{ color, fontSize: 12 }}>
-                      ✓ Seleccionada
+                      ✓ Seleccionada en el mapa
                     </span>
                   )}
                 </div>
 
-                <div style={{ fontSize: 13, marginBottom: 3 }}>
+                <div style={{ fontSize: 13, marginBottom: 4 }}>
                   Distancia:{" "}
                   {formatearDistancia(
                     Number(alternativa.distancia_metros),
@@ -1005,6 +1254,36 @@ export default function MapaRiesgoClient() {
                   Puntaje:{" "}
                   {Number(alternativa.puntaje_riesgo).toFixed(2)}
                 </div>
+
+                {explicacion && (
+                  <div
+                    style={{
+                      marginTop: 9,
+                      padding: 9,
+                      borderRadius: 6,
+                      background: recomendada ? "#f0fdf4" : "#f9fafb",
+                      border: `1px solid ${
+                        recomendada ? "#bbf7d0" : "#e5e7eb"
+                      }`,
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: "bold",
+                        marginBottom: 4,
+                        color: recomendada ? "#166534" : "#374151",
+                      }}
+                    >
+                      {recomendada
+                        ? "¿Por qué se recomienda?"
+                        : "Interpretación de la IA"}
+                    </div>
+
+                    {explicacion}
+                  </div>
+                )}
               </button>
             );
           })}

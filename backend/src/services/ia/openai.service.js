@@ -2,11 +2,73 @@ const OpenAI = require("openai");
 
 let clienteOpenAI = null;
 
-/**
- * Configura timeout y reintentos.
- * Se utilizan valores predeterminados seguros si la
- * configuración del entorno no es válida.
- */
+const FORMATO_JSON_RUTAS = {
+  type: "json_schema",
+  name: "interpretacion_rutas",
+  strict: true,
+
+  schema: {
+    type: "object",
+    additionalProperties: false,
+
+    properties: {
+      resumen_general: {
+        type: "string",
+      },
+
+      recomendacion: {
+        type: "object",
+        additionalProperties: false,
+
+        properties: {
+          perfil_ruta: {
+            type: "string",
+          },
+          motivo: {
+            type: "string",
+          },
+        },
+
+        required: ["perfil_ruta", "motivo"],
+      },
+
+      comparaciones: {
+        type: "array",
+
+        items: {
+          type: "object",
+          additionalProperties: false,
+
+          properties: {
+            perfil_ruta: {
+              type: "string",
+            },
+            explicacion: {
+              type: "string",
+            },
+          },
+
+          required: ["perfil_ruta", "explicacion"],
+        },
+      },
+
+      consideraciones: {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      },
+    },
+
+    required: [
+      "resumen_general",
+      "recomendacion",
+      "comparaciones",
+      "consideraciones",
+    ],
+  },
+};
+
 const obtenerConfiguracionCliente = () => {
   const timeoutConfigurado = Number(
     process.env.OPENAI_TIMEOUT_MS
@@ -36,9 +98,6 @@ const obtenerConfiguracionCliente = () => {
   };
 };
 
-/**
- * Obtiene una instancia reutilizable del cliente.
- */
 const obtenerClienteOpenAI = () => {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
@@ -58,10 +117,6 @@ const obtenerClienteOpenAI = () => {
   return clienteOpenAI;
 };
 
-/**
- * Convierte los errores de la API en mensajes controlados
- * para que el backend pueda identificar su causa.
- */
 const normalizarErrorOpenAI = (error) => {
   const status = Number.isInteger(error?.status)
     ? error.status
@@ -134,9 +189,6 @@ const normalizarErrorOpenAI = (error) => {
   return errorServicio;
 };
 
-/**
- * Envía una solicitud a la API Responses de OpenAI.
- */
 const solicitarRespuestaOpenAI = async ({
   instrucciones,
   entrada,
@@ -150,6 +202,10 @@ const solicitarRespuestaOpenAI = async ({
       instructions: instrucciones,
       input: entrada,
       max_output_tokens: maxOutputTokens,
+
+      text: {
+        format: FORMATO_JSON_RUTAS,
+      },
     });
   } catch (error) {
     throw normalizarErrorOpenAI(error);
