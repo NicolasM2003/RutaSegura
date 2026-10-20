@@ -63,9 +63,12 @@ const router =
  *           type: array
  *           items: { $ref: '#/components/schemas/ZonaIntersectada' }
  *         cantidad_zonas_intersectadas: { type: integer, minimum: 0 }
- *         costo_riesgo: { type: number }
- *         costo_distancia: { type: number }
- *         costo_navegacion: { type: number }
+ *         costo_riesgo: { type: number, description: Alias de costo_riesgo_normalizado (0 a 1), para compatibilidad. }
+ *         costo_riesgo_normalizado: { type: number, minimum: 0, maximum: 1, description: Puntaje de riesgo dividido por 100. }
+ *         costo_distancia: { type: number, description: Alias de costo_distancia_normalizado (0 a 1), para compatibilidad. }
+ *         costo_distancia_normalizado: { type: number, minimum: 0, maximum: 1, description: Distancia del segmento dividida por la longitud máxima de la red. }
+ *         costo_navegacion: { type: number, description: Alias de costo_navegacion_normalizado (0 a 1), para compatibilidad; no es costo Dijkstra. }
+ *         costo_navegacion_normalizado: { type: number, minimum: 0, maximum: 1, description: Métrica normalizada de análisis de riesgo y distancia; no es costo Dijkstra. }
  */
 
 /**

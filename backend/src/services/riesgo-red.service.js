@@ -465,10 +465,19 @@ const obtenerRedPeatonalConRiesgo =
           costo_riesgo:
             costos.costo_riesgo,
 
+          costo_riesgo_normalizado:
+            costos.costo_riesgo,
+
           costo_distancia:
             costos.costo_distancia,
 
+          costo_distancia_normalizado:
+            costos.costo_distancia,
+
           costo_navegacion:
+            costos.costo_navegacion,
+
+          costo_navegacion_normalizado:
             costos.costo_navegacion,
         };
       }

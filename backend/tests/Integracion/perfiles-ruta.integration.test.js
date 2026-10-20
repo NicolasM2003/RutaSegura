@@ -41,7 +41,7 @@ jest.mock("../../src/services/grafo-peatonal.service", () => ({
         id_osm: 101,
         nodo_origen: "O",
         nodo_destino: "A",
-        distancia_metros: 50,
+        distancia_metros: 50.123456,
         puntaje_riesgo: 100,
         nivel_riesgo: "Alto",
         costo_riesgo: 50,
@@ -53,7 +53,7 @@ jest.mock("../../src/services/grafo-peatonal.service", () => ({
         id_osm: 102,
         nodo_origen: "A",
         nodo_destino: "D",
-        distancia_metros: 50,
+        distancia_metros: 50.123456,
         puntaje_riesgo: 100,
         nivel_riesgo: "Alto",
         costo_riesgo: 50,
@@ -146,6 +146,10 @@ describe("Cálculo de rutas según perfil", () => {
     expect(resultado.puntaje_riesgo).toBe(0);
     expect(resultado.distancia_metros).toBe(200);
     expect(resultado.perfil_ruta).toBe("menor_riesgo");
+    expect(resultado.costo_navegacion).toBe(
+      resultado.segmentos.reduce((suma, segmento) => suma + segmento.costo_arista_operativo, 0)
+    );
+    expect(resultado.segmentos.at(-1).costo_acumulado_ruta).toBe(resultado.costo_navegacion);
   });
 
   test("el perfil equilibrada debe escoger el recorrido intermedio", async () => {
@@ -159,6 +163,10 @@ describe("Cálculo de rutas según perfil", () => {
     expect(resultado.puntaje_riesgo).toBe(40);
     expect(resultado.distancia_metros).toBe(120);
     expect(resultado.perfil_ruta).toBe("equilibrada");
+    expect(resultado.costo_navegacion).toBe(
+      resultado.segmentos.reduce((suma, segmento) => suma + segmento.costo_arista_operativo, 0)
+    );
+    expect(resultado.segmentos.at(-1).costo_acumulado_ruta).toBe(resultado.costo_navegacion);
   });
 
   test("el perfil mas_rapida debe priorizar el recorrido más corto", async () => {
@@ -170,8 +178,15 @@ describe("Cálculo de rutas según perfil", () => {
     expect(resultado.encontrada).toBe(true);
     expect(resultado.nodos_ruta).toEqual(["O", "A", "D"]);
     expect(resultado.puntaje_riesgo).toBe(100);
-    expect(resultado.distancia_metros).toBe(100);
+    expect(resultado.distancia_metros).toBe(100.25);
     expect(resultado.perfil_ruta).toBe("mas_rapida");
+    expect(resultado.costo_navegacion).toBe(
+      resultado.segmentos.reduce((suma, segmento) => suma + segmento.costo_arista_operativo, 0)
+    );
+    expect(resultado.segmentos.at(-1).costo_acumulado_ruta).toBe(resultado.costo_navegacion);
+    expect(resultado.segmentos[0].costo_arista_operativo).not.toBe(
+      Number(resultado.segmentos[0].costo_arista_operativo.toFixed(4))
+    );
   });
 
   test("debe rechazar un perfil no definido", async () => {

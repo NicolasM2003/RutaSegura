@@ -5,6 +5,11 @@ const {
 const {
   PERFILES_RUTA,
 } = require("../config/perfiles-ruta.config");
+const {
+  calcularCostoOperativoArista,
+  PESO_DISTANCIA,
+  PESO_RIESGO,
+} = require("./costo-ruta.service");
 
 const METROS_POR_GRADO_LATITUD = 111_320;
 
@@ -349,31 +354,27 @@ const construirAdyacencia = (aristas) => {
 /*
  * Calcula el costo de una arista según el perfil.
  *
- * Sin perfil, conserva el costo de navegación existente.
+ * Sin perfil, conserva la ponderación base 30/70 del grafo.
  */
 const calcularCostoArista = (
   arista,
   perfil = null
 ) => {
-  if (!perfil) {
-    return Number(arista.costo_arista);
-  }
-
   const distancia = Number(
     arista.distancia_metros
   );
 
   const puntajeRiesgo = Number(
-    arista.puntaje_riesgo ?? 0
+    arista.puntaje_riesgo
   );
 
-  const riesgoNormalizado = Number.isFinite(puntajeRiesgo)
-    ? limitar(puntajeRiesgo / 100, 0, 1)
-    : 0;
+  const riesgoNormalizado = puntajeRiesgo / 100;
 
-  return distancia * (
-    perfil.peso_distancia +
-    perfil.peso_riesgo * riesgoNormalizado
+  return calcularCostoOperativoArista(
+    distancia,
+    riesgoNormalizado,
+    perfil?.peso_distancia ?? PESO_DISTANCIA,
+    perfil?.peso_riesgo ?? PESO_RIESGO
   );
 };
 
@@ -430,10 +431,12 @@ const dijkstra = ({
       adyacencia.get(nodoActual) || [];
 
     for (const vecino of vecinos) {
-      const costo = calcularCostoArista(
-        vecino.arista,
-        perfil
-      );
+      let costo;
+      try {
+        costo = calcularCostoArista(vecino.arista, perfil);
+      } catch {
+        continue;
+      }
 
       if (
         !Number.isFinite(costo) ||
@@ -571,9 +574,7 @@ const calcularResumenRuta = ({
     tiempo_estimado_minutos:
       tiempoEstimadoMinutos,
 
-    costo_navegacion: Number(
-      costoTotal.toFixed(4)
-    ),
+    costo_navegacion: costoTotal,
 
     puntaje_riesgo: Number(
       puntajeRiesgo.toFixed(2)
@@ -791,38 +792,44 @@ const calcularRutaSegura = async ({
 
     nodos_ruta: resultadoDijkstra.nodosRuta,
 
-    segmentos: resultadoDijkstra.aristasRuta.map(
-      (arista) => ({
-        id_osm: arista.id_osm,
+    segmentos: (() => {
+      let costoAcumulado = 0;
+      return resultadoDijkstra.aristasRuta.map(
+        (arista) => {
+          const costoSegmento = calcularCostoArista(arista, perfil);
+          costoAcumulado += costoSegmento;
+          return {
+            id_osm: arista.id_osm,
 
-        nodo_origen: arista.nodo_origen,
-        nodo_destino: arista.nodo_destino,
+            nodo_origen: arista.nodo_origen,
+            nodo_destino: arista.nodo_destino,
 
-        distancia_metros: arista.distancia_metros,
+            distancia_metros: arista.distancia_metros,
 
-        puntaje_riesgo: arista.puntaje_riesgo,
-        nivel_riesgo: arista.nivel_riesgo,
+            puntaje_riesgo: arista.puntaje_riesgo,
+            nivel_riesgo: arista.nivel_riesgo,
 
-        costo_riesgo: arista.costo_riesgo,
-        costo_distancia: arista.costo_distancia,
+            costo_riesgo: arista.costo_riesgo,
+            costo_distancia: arista.costo_distancia,
 
-        costo_arista: Number(
-          calcularCostoArista(
-            arista,
-            perfil
-          ).toFixed(4)
-        ),
+            // Publicamos la misma precisión usada por Dijkstra. Redondear cada
+            // segmento por separado haría que su suma difiriera del costo total.
+            costo_arista: costoSegmento,
+            costo_arista_operativo: costoSegmento,
+            costo_acumulado_ruta: costoAcumulado,
 
-        zonas_intersectadas:
-          arista.zonas_intersectadas,
+            zonas_intersectadas:
+              arista.zonas_intersectadas,
 
-        nombre: arista.nombre,
-        tipo: arista.tipo,
+            nombre: arista.nombre,
+            tipo: arista.tipo,
 
-        categoria_peatonal:
-          arista.categoria_peatonal,
-      })
-    ),
+            categoria_peatonal:
+              arista.categoria_peatonal,
+          };
+        }
+      );
+    })(),
   };
 };
 

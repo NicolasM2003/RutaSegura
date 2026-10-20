@@ -14,7 +14,10 @@ const router = express.Router();
  *     tags:
  *       - Rutas
  *     summary: Obtener rutas alternativas
- *     description: Calcula rutas alternativas según la distancia y el riesgo peatonal.
+ *     description: >-
+ *       Calcula alternativas con costo por arista = distancia_metros * (peso_distancia +
+ *       peso_riesgo * riesgo_normalizado). costo_navegacion es la suma usada por Dijkstra,
+ *       expresada en metros ponderados; distancia_metros es distancia física.
  *     parameters:
  *       - in: query
  *         name: comuna
@@ -128,6 +131,7 @@ const router = express.Router();
  *                         example: 67.6
  *                       costo_navegacion:
  *                         type: number
+ *                         description: Costo acumulado de Dijkstra, en metros ponderados. Se conserva la precisión numérica de Dijkstra; para sumas externas se admite tolerancia IEEE-754 de 1e-9 * max(1, abs(costo_navegacion)).
  *                       puntaje_riesgo:
  *                         type: number
  *                         example: 24.95
@@ -163,7 +167,13 @@ const router = express.Router();
  *                         type: array
  *                         items:
  *                           type: object
- *                           additionalProperties: true
+ *                           properties:
+ *                             distancia_metros: { type: number, description: Distancia física del segmento en metros. }
+ *                             costo_riesgo: { type: number, description: Campo legado de diagnóstico, distancia física por riesgo normalizado, en metros; no es el costo ponderado de Dijkstra. }
+ *                             costo_distancia: { type: number, description: Campo legado de diagnóstico, componente distancia con peso base 0.3, en metros; no es necesariamente el peso usado por un perfil. }
+ *                             costo_arista: { type: number, description: Alias de compatibilidad de costo_arista_operativo, con precisión completa de Dijkstra y en metros ponderados. }
+ *                             costo_arista_operativo: { type: number, description: Costo utilizado por Dijkstra para este segmento, con precisión completa y en metros ponderados. }
+ *                             costo_acumulado_ruta: { type: number, description: Suma de los pesos de Dijkstra hasta este segmento, con precisión completa y en metros ponderados. }
  *                 interpretacion_ia:
  *                   type: object
  *                   description: Se incluye cuando hay rutas; una falla de IA se indica sin retirar las rutas calculadas.
@@ -206,7 +216,10 @@ router.get(
  *     tags:
  *       - Rutas
  *     summary: Calcular ruta peatonal segura
- *     description: Calcula una ruta entre un origen y un destino considerando distancia y riesgo.
+ *     description: >-
+ *       Calcula una ruta con costo por arista = distancia_metros * (peso_distancia +
+ *       peso_riesgo * riesgo_normalizado). costo_navegacion es la suma usada por Dijkstra,
+ *       expresada en metros ponderados; distancia_metros es distancia física.
  *     parameters:
  *       - in: query
  *         name: comuna
@@ -290,6 +303,7 @@ router.get(
  *                   type: number
  *                 costo_navegacion:
  *                   type: number
+ *                   description: Costo acumulado de Dijkstra, en metros ponderados. Se conserva la precisión numérica de Dijkstra; para sumas externas se admite tolerancia IEEE-754 de 1e-9 * max(1, abs(costo_navegacion)).
  *                 puntaje_riesgo:
  *                   type: number
  *                 nivel_riesgo:
@@ -322,7 +336,13 @@ router.get(
  *                   type: array
  *                   items:
  *                     type: object
- *                     additionalProperties: true
+ *                     properties:
+ *                       distancia_metros: { type: number, description: Distancia física del segmento en metros. }
+ *                       costo_riesgo: { type: number, description: Campo legado de diagnóstico, distancia física por riesgo normalizado, en metros; no es el costo ponderado de Dijkstra. }
+ *                       costo_distancia: { type: number, description: Campo legado de diagnóstico, componente distancia con peso base 0.3, en metros; no es necesariamente el peso usado por un perfil. }
+ *                       costo_arista: { type: number, description: Alias de compatibilidad de costo_arista_operativo, con precisión completa de Dijkstra y en metros ponderados. }
+ *                       costo_arista_operativo: { type: number, description: Costo utilizado por Dijkstra para este segmento, con precisión completa y en metros ponderados. }
+ *                       costo_acumulado_ruta: { type: number, description: Suma de los pesos de Dijkstra hasta este segmento, con precisión completa y en metros ponderados. }
  *       "400":
  *         description: Error durante el cálculo de la ruta.
  *         content:
