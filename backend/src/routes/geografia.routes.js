@@ -68,9 +68,9 @@ const router = express.Router();
  *         distancia_metros: { type: number }
  *         puntaje_riesgo: { type: number, minimum: 0, maximum: 100 }
  *         nivel_riesgo: { type: string, enum: [Bajo, Medio, Alto] }
- *         costo_riesgo: { type: number }
- *         costo_distancia: { type: number }
- *         costo_arista: { type: number }
+ *         costo_riesgo: { type: number, description: Componente de riesgo por segmento en metros, compatibilidad. }
+ *         costo_distancia: { type: number, description: Componente de distancia ponderada por segmento en metros, compatibilidad. }
+ *         costo_arista: { type: number, description: Costo operativo base 30/70 por segmento en metros ponderados. }
  *         zonas_intersectadas: { type: array, items: { $ref: '#/components/schemas/ZonaIntersectada' } }
  *         nombre: { type: string, nullable: true }
  *         comuna: { type: string, nullable: true }

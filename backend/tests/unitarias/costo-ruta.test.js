@@ -104,7 +104,33 @@ describe("Pesos del costo de navegación", () => {
 
 const {
   calcularCostoNavegacion,
+  calcularCostoOperativoArista,
 } = require("../../src/services/costo-ruta.service");
+
+describe("Costo operativo centralizado por arista", () => {
+  test("aplica distancia * (peso distancia + peso riesgo * riesgo normalizado)", () => {
+    expect(calcularCostoOperativoArista(200, 0.25, 0.5, 0.5)).toBe(125);
+  });
+
+  test.each([
+    [-1, 0.5, 0.5, 0.5],
+    [10, -0.1, 0.5, 0.5],
+    [10, 1.1, 0.5, 0.5],
+    [Infinity, 0.5, 0.5, 0.5],
+    [10, 0.5, -0.1, 0.5],
+    [10, null, 0.5, 0.5],
+    ["", 0.5, 0.5, 0.5],
+  ])("rechaza entrada inválida %p", (...args) => {
+    expect(() => calcularCostoOperativoArista(...args)).toThrow();
+  });
+
+  test("dividir una arista de igual riesgo conserva el costo total", () => {
+    const completa = calcularCostoOperativoArista(120, 0.4, 0.3, 0.7);
+    const dividida = calcularCostoOperativoArista(50, 0.4, 0.3, 0.7)
+      + calcularCostoOperativoArista(70, 0.4, 0.3, 0.7);
+    expect(dividida).toBeCloseTo(completa);
+  });
+});
 
 describe("Cálculo del costo de navegación", () => {
   test("debe calcular el costo considerando 70% riesgo y 30% distancia", () => {

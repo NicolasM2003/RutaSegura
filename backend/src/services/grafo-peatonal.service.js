@@ -1,6 +1,11 @@
 const {
   obtenerRedPeatonalConRiesgo,
 } = require("./riesgo-red.service");
+const {
+  calcularCostoOperativoArista,
+  PESO_DISTANCIA,
+  PESO_RIESGO,
+} = require("./costo-ruta.service");
 
 /**
  * Normaliza la geometría de una vía a:
@@ -277,6 +282,10 @@ const obtenerGrafoPeatonal = async ({
         1
       );
 
+    if (!Number.isFinite(riesgoNormalizado)) {
+      continue;
+    }
+
     /*
      * Registrar nodos.
      */
@@ -343,28 +352,13 @@ const obtenerGrafoPeatonal = async ({
         continue;
       }
 
-      /*
-       * MODELO PROVISIONAL DE NAVEGACIÓN
-       *
-       * 30% distancia
-       * 70% riesgo
-       *
-       * factor = 0.3 + 0.7 * riesgo
-       *
-       * Riesgo 0:
-       * factor = 0.3
-       *
-       * Riesgo 1:
-       * factor = 1.0
-       */
-      const factorRiesgo =
-        0.3 +
-        0.7 *
-          riesgoNormalizado;
-
       const costoArista =
-        distancia *
-        factorRiesgo;
+        calcularCostoOperativoArista(
+          distancia,
+          riesgoNormalizado,
+          PESO_DISTANCIA,
+          PESO_RIESGO
+        );
 
       const arista = {
         id: `${via.id_osm}-${i}`,
