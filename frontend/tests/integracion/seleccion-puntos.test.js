@@ -1,3 +1,4 @@
+
 let mockMapHandlers = null;
 
 jest.mock("react-leaflet", () => ({
@@ -20,16 +21,15 @@ describe("Prueba funcional de selección de puntos", () => {
     mockMapHandlers = null;
   });
 
-  test("debe seleccionar el origen con el primer clic", () => {
-    const onSeleccionarOrigen = jest.fn();
-    const onSeleccionarDestino = jest.fn();
+  test("debe seleccionar el origen cuando el modo es origen", () => {
+    const onSeleccionarPunto = jest.fn();
 
     SeleccionarPuntos({
-      origen: null,
-      destino: null,
-      onSeleccionarOrigen,
-      onSeleccionarDestino,
+      modo: "origen",
+      onSeleccionarPunto,
     });
+
+    expect(mockMapHandlers).not.toBeNull();
 
     mockMapHandlers.click({
       latlng: {
@@ -38,27 +38,24 @@ describe("Prueba funcional de selección de puntos", () => {
       },
     });
 
-    expect(onSeleccionarOrigen).toHaveBeenCalledWith(
+    expect(onSeleccionarPunto).toHaveBeenCalledTimes(1);
+
+    expect(onSeleccionarPunto).toHaveBeenCalledWith(
+      "origen",
       -33.024,
       -71.551
     );
-
-    expect(onSeleccionarDestino).not.toHaveBeenCalled();
   });
 
-  test("debe seleccionar el destino con el segundo clic", () => {
-    const onSeleccionarOrigen = jest.fn();
-    const onSeleccionarDestino = jest.fn();
+  test("debe seleccionar el destino cuando el modo es destino", () => {
+    const onSeleccionarPunto = jest.fn();
 
     SeleccionarPuntos({
-      origen: {
-        latitud: -33.024,
-        longitud: -71.551,
-      },
-      destino: null,
-      onSeleccionarOrigen,
-      onSeleccionarDestino,
+      modo: "destino",
+      onSeleccionarPunto,
     });
+
+    expect(mockMapHandlers).not.toBeNull();
 
     mockMapHandlers.click({
       latlng: {
@@ -67,30 +64,24 @@ describe("Prueba funcional de selección de puntos", () => {
       },
     });
 
-    expect(onSeleccionarDestino).toHaveBeenCalledWith(
+    expect(onSeleccionarPunto).toHaveBeenCalledTimes(1);
+
+    expect(onSeleccionarPunto).toHaveBeenCalledWith(
+      "destino",
       -33.018,
       -71.548
     );
-
-    expect(onSeleccionarOrigen).not.toHaveBeenCalled();
   });
 
-  test("no debe modificar los puntos cuando ambos ya están definidos", () => {
-    const onSeleccionarOrigen = jest.fn();
-    const onSeleccionarDestino = jest.fn();
+  test("no debe seleccionar ningún punto cuando no hay modo activo", () => {
+    const onSeleccionarPunto = jest.fn();
 
     SeleccionarPuntos({
-      origen: {
-        latitud: -33.024,
-        longitud: -71.551,
-      },
-      destino: {
-        latitud: -33.018,
-        longitud: -71.548,
-      },
-      onSeleccionarOrigen,
-      onSeleccionarDestino,
+      modo: null,
+      onSeleccionarPunto,
     });
+
+    expect(mockMapHandlers).not.toBeNull();
 
     mockMapHandlers.click({
       latlng: {
@@ -99,7 +90,6 @@ describe("Prueba funcional de selección de puntos", () => {
       },
     });
 
-    expect(onSeleccionarOrigen).not.toHaveBeenCalled();
-    expect(onSeleccionarDestino).not.toHaveBeenCalled();
+    expect(onSeleccionarPunto).not.toHaveBeenCalled();
   });
 });
