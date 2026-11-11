@@ -2,6 +2,8 @@ const supabase = require("../config/supabase");
 const { calcularRiesgo } = require("./riesgo.service");
 
 const TAMANO_CELDA = 0.004;
+const RADIO_CONCENTRACION_METROS = 75;
+const METROS_POR_GRADO = 111_320;
 
 const obtenerDelitosGeograficos = async (comuna) => {
   let comunaId = null;
@@ -100,14 +102,55 @@ const obtenerClaveZona = (latitud, longitud) => {
   return `${fila}:${columna}`;
 };
 
-const obtenerCentroZona = (latitud, longitud) => {
-  const fila = Math.floor(latitud / TAMANO_CELDA);
-  const columna = Math.floor(longitud / TAMANO_CELDA);
+const distanciaMetros = (a, b) => {
+  const latitudMedia = ((a.latitud + b.latitud) / 2) * Math.PI / 180;
+  const diferenciaLatitud = (a.latitud - b.latitud) * METROS_POR_GRADO;
+  const diferenciaLongitud =
+    (a.longitud - b.longitud) * METROS_POR_GRADO * Math.cos(latitudMedia);
 
-  return {
-    latitud: (fila + 0.5) * TAMANO_CELDA,
-    longitud: (columna + 0.5) * TAMANO_CELDA,
-  };
+  return Math.hypot(diferenciaLatitud, diferenciaLongitud);
+};
+
+const obtenerCentroZona = (delitosZona) => {
+  const puntos = delitosZona
+    .map((delito) => ({
+      latitud: Number(delito.latitud),
+      longitud: Number(delito.longitud),
+    }))
+    .filter((punto) =>
+      Number.isFinite(punto.latitud) && Number.isFinite(punto.longitud)
+    );
+
+  if (puntos.length === 0) {
+    return { latitud: null, longitud: null };
+  }
+
+  // Coloca el círculo en un delito real perteneciente al núcleo más denso,
+  // evitando que el centro geométrico de la celda caiga fuera del área urbana.
+  let mejorPunto = puntos[0];
+  let mayorConcentracion = -1;
+  let menorDistanciaTotal = Number.POSITIVE_INFINITY;
+
+  for (const candidato of puntos) {
+    const cercanos = puntos.filter(
+      (punto) => distanciaMetros(candidato, punto) <= RADIO_CONCENTRACION_METROS
+    );
+    const distanciaTotal = cercanos.reduce(
+      (total, punto) => total + distanciaMetros(candidato, punto),
+      0
+    );
+
+    if (
+      cercanos.length > mayorConcentracion ||
+      (cercanos.length === mayorConcentracion && distanciaTotal < menorDistanciaTotal)
+    ) {
+      mejorPunto = candidato;
+      mayorConcentracion = cercanos.length;
+      menorDistanciaTotal = distanciaTotal;
+    }
+  }
+
+  return mejorPunto;
 };
 
 const obtenerZonasRiesgo = async ({
@@ -174,12 +217,7 @@ const obtenerZonasRiesgo = async ({
       delitosTotalesZona: cantidadDelitos,
     });
 
-    const primerDelito = delitosZona[0];
-
-    const centro = obtenerCentroZona(
-      Number(primerDelito.latitud),
-      Number(primerDelito.longitud)
-    );
+    const centro = obtenerCentroZona(delitosZona);
 
     return {
       id_zona: zona.clave,

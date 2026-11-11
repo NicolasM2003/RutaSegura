@@ -3,7 +3,7 @@ const {
   calcularPuntajeHorario,
   clasificarRiesgo,
   calcularRiesgo,
-} = require("../src/services/riesgo.service");
+} = require("../../src/services/riesgo.service");
 
 describe("calcularPuntajeCantidad", () => {
   test("devuelve 100 cuando la zona tiene la cantidad máxima", () => {
