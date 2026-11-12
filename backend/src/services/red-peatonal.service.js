@@ -55,8 +55,11 @@ const SUPABASE_INSERT_CHUNK_SIZE = 500;
  * ==========================================================
  */
 
+// Caché compartida por solicitudes atendidas por este proceso Node.js;
+// no coordina ni comparte datos con otras instancias/procesos.
 const cacheRedPeatonal =
   new Map();
+const cargasEnCurso = new Map();
 
 const esperar = (milisegundos) =>
   new Promise((resolve) =>
@@ -264,6 +267,21 @@ const obtenerCacheComuna = (
     clave
   );
 };
+
+const ejecutarUnaCarga = async (clave, cargar) => {
+  if (cargasEnCurso.has(clave)) return cargasEnCurso.get(clave);
+  const carga = Promise.resolve().then(cargar);
+  cargasEnCurso.set(clave, carga);
+  try {
+    return await carga;
+  } finally {
+    if (cargasEnCurso.get(clave) === carga) cargasEnCurso.delete(clave);
+  }
+};
+
+const serializarBbox = (bbox) => bbox
+  ? [bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon].join(",")
+  : "sin-bbox";
 
 const cacheEstaVigente = (
   entrada
@@ -1034,6 +1052,7 @@ const obtenerRedDesdeSupabase = async (
     return {
       encontrada: false,
       segmentos: [],
+      consultaFallida: true,
     };
   }
 };
@@ -1444,11 +1463,11 @@ const obtenerGrupoDesdeOverpass = async ({
   grupo,
   indiceGrupo,
   comuna,
+  bbox,
 }) => {
-  const cacheComuna =
-    obtenerCacheComuna(
-      comuna
-    );
+  const particionCache = `${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bbox)}`;
+  const cacheComuna = obtenerCacheComuna(particionCache);
+  const claveCarga = `${particionCache}|grupo:${indiceGrupo}`;
 
   const entradaCache =
     cacheComuna.get(
@@ -1488,6 +1507,7 @@ const obtenerGrupoDesdeOverpass = async ({
     );
 
   try {
+    return await ejecutarUnaCarga(claveCarga, async () => {
     const resultado =
       await ejecutarConsultaOverpass(
         consulta,
@@ -1527,6 +1547,7 @@ const obtenerGrupoDesdeOverpass = async ({
     );
 
     return segmentos;
+    });
   } catch (error) {
     throw new Error(
       `No se pudo cargar la red peatonal de ${
@@ -1585,10 +1606,8 @@ const obtenerRedPeatonal = async ({
      * el comportamiento actual.
      */
 
-    const cacheComuna =
-      obtenerCacheComuna(
-        comuna
-      );
+    const particionCache = `${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bboxNormalizado)}`;
+    const cacheComuna = obtenerCacheComuna(particionCache);
 
     const claveCache =
       `highway:${highway}`;
@@ -1616,59 +1635,28 @@ const obtenerRedPeatonal = async ({
       segmentos =
         entradaCache.segmentos;
     } else {
-      console.log(
-        `CACHÉ MISS - ${
-          comuna || "BBOX"
-        } - ${highway}`
-      );
+      console.log(`CACHÉ MISS - ${comuna || "BBOX"} - ${highway}`);
+      segmentos = await ejecutarUnaCarga(`${particionCache}|${claveCache}`, async () => {
+        const entradaDuranteEspera = cacheComuna.get(claveCache);
+        if (cacheEstaVigente(entradaDuranteEspera)) return entradaDuranteEspera.segmentos;
 
-      const consulta =
-        construirConsulta(
-          [highway],
-          comuna
-        );
-
-      const resultado =
-        await ejecutarConsultaOverpass(
+        const consulta = construirConsulta([highway], comuna);
+        const resultado = await ejecutarConsultaOverpass(
           consulta,
-          `${
-            comuna || "BBOX"
-          } / ${highway}`
+          `${comuna || "BBOX"} / ${highway}`
         );
+        const cargados = transformarSegmentos(resultado.elements || [], comuna);
 
-      segmentos =
-        transformarSegmentos(
-          resultado.elements || [],
-          comuna
-        );
-
-      cacheComuna.set(
-        claveCache,
-        {
-          segmentos,
-          fecha: Date.now(),
+        cacheComuna.set(claveCache, { segmentos: cargados, fecha: Date.now() });
+        if (comuna && cargados.length > 0) {
+          try {
+            await guardarEnSupabase(cargados);
+          } catch (error) {
+            console.warn("No fue posible guardar highway específico en Supabase:", error.message);
+          }
         }
-      );
-
-      /*
-       * Persistimos también los highways
-       * específicos si existe comuna.
-       */
-      if (
-        comuna &&
-        segmentos.length > 0
-      ) {
-        try {
-          await guardarEnSupabase(
-            segmentos
-          );
-        } catch (error) {
-          console.warn(
-            "No fue posible guardar highway específico en Supabase:",
-            error.message
-          );
-        }
-      }
+        return cargados;
+      });
     }
 
     return filtrarPorBbox(
@@ -1684,12 +1672,31 @@ const obtenerRedPeatonal = async ({
    */
 
   if (comuna || (soloSupabase && bboxNormalizado)) {
-    const resultadoSupabase =
-      await obtenerRedDesdeSupabase(
-        comuna,
-        bboxNormalizado,
-        { soloBbox: soloSupabase }
-      );
+    const claveSupabase = `supabase|${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bboxNormalizado)}|soloBbox:${soloSupabase}`;
+    const particionCache = obtenerCacheComuna("resultados-red");
+    const cacheSupabase = particionCache.get(claveSupabase);
+    let resultadoSupabase;
+
+    if (cacheEstaVigente(cacheSupabase)) {
+      resultadoSupabase = cacheSupabase.resultado;
+    } else {
+      resultadoSupabase = await ejecutarUnaCarga(claveSupabase, async () => {
+        const cacheDuranteEspera = particionCache.get(claveSupabase);
+        if (cacheEstaVigente(cacheDuranteEspera)) return cacheDuranteEspera.resultado;
+        const resultado = await obtenerRedDesdeSupabase(
+          comuna,
+          bboxNormalizado,
+          { soloBbox: soloSupabase }
+        );
+        if (!resultado.consultaFallida) {
+          particionCache.set(claveSupabase, {
+            resultado,
+            fecha: Date.now(),
+          });
+        }
+        return resultado;
+      });
+    }
 
     if (
       resultadoSupabase.encontrada
@@ -1733,6 +1740,7 @@ const obtenerRedPeatonal = async ({
         grupo,
         indiceGrupo: i,
         comuna,
+        bbox: bboxNormalizado,
       });
 
     segmentosTodos.push(

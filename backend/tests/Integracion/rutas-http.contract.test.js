@@ -39,6 +39,7 @@ jest.mock("../../src/services/ia/interpretacion-rutas.service", () => ({
   })),
 }));
 
+const { calcularRutasAlternativas } = require("../../src/services/ruta.service");
 const app = require("../../src/app");
 
 const parametros =
@@ -81,6 +82,22 @@ describe("Contrato HTTP de costos de ruta", () => {
     expect(response.status).toBe(200);
     expect(response.body.rutas).toHaveLength(1);
     verificarCostosDeRuta(response.body.rutas[0]);
+  });
+
+  test("GET /api/rutas/alternativas ignora un factor enviado por el cliente", async () => {
+    calcularRutasAlternativas.mockClear();
+    const response = await request(app).get(
+      `/api/rutas/alternativas${parametros}&factorPenalizacion=0`
+    );
+
+    expect(response.status).toBe(200);
+    expect(calcularRutasAlternativas).toHaveBeenCalledTimes(1);
+    expect(calcularRutasAlternativas).toHaveBeenCalledWith({
+      comuna: undefined,
+      origen: { latitud: -33.024, longitud: -71.551 },
+      destino: { latitud: -33.015, longitud: -71.535 },
+      rangoHorario: undefined,
+    });
   });
 
   test("Swagger documenta tipos, compatibilidad, semántica y unidades", async () => {

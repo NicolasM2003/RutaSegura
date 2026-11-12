@@ -12,10 +12,24 @@ const {
 } = require("./costo-ruta.service");
 
 const METROS_POR_GRADO_LATITUD = 111_320;
+const IDS_SEGMENTOS_RUTA = Symbol("idsSegmentosRuta");
+const IDS_LEGACY_ARISTAS = new WeakMap();
+let siguienteIdLegacy = 0;
+const obtenerIdSegmento = (arista) => {
+  if (arista.id != null) return arista.id;
+  if (!IDS_LEGACY_ARISTAS.has(arista)) {
+    IDS_LEGACY_ARISTAS.set(arista, `legacy-arista-${++siguienteIdLegacy}`);
+  }
+  return IDS_LEGACY_ARISTAS.get(arista);
+};
 
 // Velocidad peatonal inicial para estimar el tiempo de recorrido.
 // Valor provisional: 1,2 metros por segundo.
 const VELOCIDAD_PEATONAL_METROS_SEGUNDO = 1.2;
+
+// Factor inicial de producción aprobado para la diversificación acumulativa.
+// Las pruebas internas pueden pasar un factor experimental distinto.
+const FACTOR_PENALIZACION_RUTAS = 0.25;
 
 const MARGEN_BBOX_RUTA_METROS = (() => {
   const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
@@ -358,7 +372,8 @@ const construirAdyacencia = (aristas) => {
  */
 const calcularCostoArista = (
   arista,
-  perfil = null
+  perfil = null,
+  { factorPenalizacion = 0, usosSegmento = 0 } = {}
 ) => {
   const distancia = Number(
     arista.distancia_metros
@@ -370,12 +385,13 @@ const calcularCostoArista = (
 
   const riesgoNormalizado = puntajeRiesgo / 100;
 
-  return calcularCostoOperativoArista(
+  const costoOriginal = calcularCostoOperativoArista(
     distancia,
     riesgoNormalizado,
     perfil?.peso_distancia ?? PESO_DISTANCIA,
     perfil?.peso_riesgo ?? PESO_RIESGO
   );
+  return costoOriginal * (1 + factorPenalizacion * usosSegmento);
 };
 
 /*
@@ -391,6 +407,8 @@ const dijkstra = ({
   nodoOrigen,
   nodoDestino,
   perfil = null,
+  factorPenalizacion = 0,
+  usosSegmento = new Map(),
 }) => {
   const adyacencia = construirAdyacencia(aristas);
 
@@ -433,7 +451,11 @@ const dijkstra = ({
     for (const vecino of vecinos) {
       let costo;
       try {
-        costo = calcularCostoArista(vecino.arista, perfil);
+        const usos = usosSegmento.get(obtenerIdSegmento(vecino.arista)) || 0;
+        costo = calcularCostoArista(vecino.arista, perfil, {
+          factorPenalizacion,
+          usosSegmento: usos,
+        });
       } catch {
         continue;
       }
@@ -619,6 +641,8 @@ const calcularRutaSegura = async ({
   rangoHorario,
   perfilRuta = null,
   grafoPrecalculado = null,
+  factorPenalizacion = 0,
+  usosSegmento = new Map(),
 }) => {
   const perfil = perfilRuta
     ? PERFILES_RUTA[perfilRuta]
@@ -707,6 +731,8 @@ const calcularRutaSegura = async ({
     nodoDestino: destinoCercano.nodo.id,
 
     perfil,
+    factorPenalizacion,
+    usosSegmento,
   });
 
   if (!resultadoDijkstra) {
@@ -734,7 +760,9 @@ const calcularRutaSegura = async ({
 
   const resumen = calcularResumenRuta({
     aristasRuta: resultadoDijkstra.aristasRuta,
-    costoTotal: resultadoDijkstra.costoTotal,
+    costoTotal: resultadoDijkstra.aristasRuta.reduce(
+      (total, arista) => total + calcularCostoArista(arista, perfil), 0
+    ),
   });
 
   resumen.geometria = construirGeometriaRuta(
@@ -791,6 +819,7 @@ const calcularRutaSegura = async ({
       : {}),
 
     nodos_ruta: resultadoDijkstra.nodosRuta,
+    [IDS_SEGMENTOS_RUTA]: resultadoDijkstra.aristasRuta.map(obtenerIdSegmento),
 
     segmentos: (() => {
       let costoAcumulado = 0;
@@ -985,7 +1014,13 @@ const calcularSimilitudCorredor = (rutaA, rutaB) => {
 /*
  * Determina si dos alternativas son redundantes.
  */
-const sonRutasEquivalentes = (rutaA, rutaB) => {
+const sonSegmentosIdenticos = (rutaA, rutaB) => {
+  const idsA = rutaA[IDS_SEGMENTOS_RUTA];
+  const idsB = rutaB[IDS_SEGMENTOS_RUTA];
+  if (Array.isArray(idsA) && Array.isArray(idsB)) {
+    return idsA.length === idsB.length && idsA.every((id, index) => id === idsB[index]);
+  }
+
   const nodosA = Array.isArray(rutaA.nodos_ruta)
     ? rutaA.nodos_ruta.join("->")
     : "";
@@ -994,10 +1029,11 @@ const sonRutasEquivalentes = (rutaA, rutaB) => {
     ? rutaB.nodos_ruta.join("->")
     : "";
 
-  // Caso 1: misma secuencia exacta de nodos.
-  if (nodosA && nodosA === nodosB) {
-    return true;
-  }
+  return Boolean(nodosA && nodosA === nodosB);
+};
+
+const sonRutasEquivalentes = (rutaA, rutaB) => {
+  if (sonSegmentosIdenticos(rutaA, rutaB)) return true;
 
   // Caso 2: utilizan prácticamente los mismos corredores.
   const similitud = calcularSimilitudCorredor(
@@ -1051,6 +1087,7 @@ const calcularRutasAlternativas = async ({
   origen,
   destino,
   rangoHorario,
+  factorPenalizacion = FACTOR_PENALIZACION_RUTAS,
 }) => {
   const {
     latOrigen,
@@ -1081,6 +1118,7 @@ const calcularRutasAlternativas = async ({
 
   const rutasUnicas = [];
   const recorridosVistos = new Set();
+  const usosSegmento = new Map();
 
   for (const perfilRuta of Object.keys(PERFILES_RUTA)) {
     const resultado = await calcularRutaSegura({
@@ -1091,6 +1129,8 @@ const calcularRutasAlternativas = async ({
 
       rangoHorario,
       perfilRuta,
+      factorPenalizacion,
+      usosSegmento,
 
       grafoPrecalculado: grafo,
     });
@@ -1099,26 +1139,28 @@ const calcularRutasAlternativas = async ({
       !resultado.encontrada ||
       !Array.isArray(resultado.nodos_ruta)
     ) {
+      console.log(`RUTA - Alternativa no disponible: ${perfilRuta} (sin conectividad)`);
       continue;
     }
 
-    const identificadorRecorrido =
-      resultado.nodos_ruta.join("->");
+    const identificadorRecorrido = Array.isArray(resultado[IDS_SEGMENTOS_RUTA])
+      ? resultado[IDS_SEGMENTOS_RUTA].join("->")
+      : resultado.nodos_ruta.join("->");
 
-    const rutaRedundante = rutasUnicas.some(
-      (rutaExistente) =>
-        sonRutasEquivalentes(
-          rutaExistente,
-          resultado
-        )
+    const duplicadaExacta = rutasUnicas.some((rutaExistente) =>
+      sonSegmentosIdenticos(rutaExistente, resultado)
+    );
+    const similarAExistente = !duplicadaExacta && rutasUnicas.some((rutaExistente) =>
+      sonRutasEquivalentes(rutaExistente, resultado)
     );
 
     if (
       recorridosVistos.has(identificadorRecorrido) ||
-      rutaRedundante
+      duplicadaExacta ||
+      similarAExistente
     ) {
       console.log(
-        `RUTA - Alternativa redundante descartada: ${perfilRuta}`
+        `RUTA - Alternativa descartada: ${perfilRuta} (${duplicadaExacta || recorridosVistos.has(identificadorRecorrido) ? "secuencia de segmentos idéntica" : "similitud de corredores >= 90% sin diferencia de riesgo >= 8"})`
       );
 
       continue;
@@ -1129,6 +1171,11 @@ const calcularRutasAlternativas = async ({
     );
 
     rutasUnicas.push(resultado);
+    for (const idSegmento of resultado[IDS_SEGMENTOS_RUTA] || []) {
+      if (idSegmento != null) {
+        usosSegmento.set(idSegmento, (usosSegmento.get(idSegmento) || 0) + 1);
+      }
+    }
   }
 
   const cantidadPerfiles =
