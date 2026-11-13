@@ -27,6 +27,7 @@ import {
   LeyendaMapa,
 } from "./CapasMapa.web";
 import UbicacionesMapaWeb from "./UbicacionesMapa.web";
+import "./AlternativasRuta.web.css";
 import {
   buscarDirecciones,
   type DestinoRuta,
@@ -919,375 +920,211 @@ export default function MapaRiesgoClient() {
       <LeyendaMapa />
 
       {cargandoRuta && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            top: 80,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#111827",
-            color: "#ffffff",
-            padding: "12px 20px",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 14,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-          }}
-        >
-          Calculando rutas y preparando la recomendación de IA...
+        <div className="rs-route-alert rs-route-alert--loading" role="status">
+          <span className="rs-route-spinner" aria-hidden="true" />
+          <span>Calculando rutas y preparando la recomendación de RutaSegura...</span>
         </div>
       )}
 
       {errorRuta && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            top: 135,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#fee2e2",
-            color: "#991b1b",
-            padding: "12px 20px",
-            borderRadius: 8,
-            fontWeight: "bold",
-            fontSize: 14,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-            border: "1px solid #fca5a5",
-          }}
-        >
+        <div className="rs-route-alert rs-route-alert--error" role="alert">
           {errorRuta}
         </div>
       )}
 
       {ruta?.encontrada && rutasAlternativas.length > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 20000,
-            bottom: 20,
-            right: 20,
-            width: 370,
-            maxWidth: "calc(100% - 32px)",
-            maxHeight: "70%",
-            overflowY: "auto",
-            background: "rgba(255,255,255,0.98)",
-            padding: 14,
-            borderRadius: 10,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-            fontFamily: "Arial, sans-serif",
-            color: "#1f2937",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 16,
-              fontWeight: "bold",
-              marginBottom: 10,
-            }}
-          >
-            Alternativas de ruta
-          </div>
-
-          <div
-            style={{
-              fontSize: 12,
-              color: "#4b5563",
-              marginBottom: 12,
-            }}
-          >
-            La IA compara las alternativas calculadas por RutaSegura.
-            Puedes seleccionar una ruta para destacarla en el mapa.
-          </div>
+        <section className="rs-routes-panel" aria-label="Alternativas de ruta">
+          <header className="rs-routes-header">
+            <div className="rs-routes-heading-copy">
+              <span className="rs-routes-eyebrow">RESULTADO DEL RECORRIDO</span>
+              <h2 className="rs-routes-title">Alternativas de ruta</h2>
+              <p className="rs-routes-description">
+                Compara las opciones disponibles y selecciona la que mejor se adapte a tu recorrido.
+              </p>
+            </div>
+            <div className="rs-routes-count" aria-label={`${rutasAlternativas.length} rutas encontradas`}>
+              <strong>{rutasAlternativas.length}</strong>
+              <span>{rutasAlternativas.length === 1 ? "ruta" : "rutas"}</span>
+            </div>
+          </header>
 
           {ruta.mensaje && (
-            <div
-              role="status"
-              style={{
-                background: "#fff7ed",
-                border: "1px solid #fed7aa",
-                color: "#9a3412",
-                borderRadius: 6,
-                padding: "8px 10px",
-                fontSize: 12,
-                lineHeight: 1.5,
-                marginBottom: 10,
-              }}
-            >
+            <div className="rs-routes-notice" role="status">
               {ruta.mensaje}
             </div>
           )}
 
-          {/* Recomendación general de la IA */}
           {ruta.interpretacion_ia?.disponible === true && (
-            <section
-              aria-live="polite"
-              style={{
-                background: "#f0fdf4",
-                border: "1px solid #bbf7d0",
-                borderRadius: 8,
-                padding: 12,
-                marginBottom: 14,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 14,
-                  fontWeight: "bold",
-                  color: "#166534",
-                  marginBottom: 8,
-                }}
-              >
-                Recomendación de RutaSegura
+            <section className="rs-routes-recommendation" aria-live="polite">
+              <div className="rs-routes-recommendation-heading">
+                <span className="rs-routes-recommendation-label">RECOMENDACIÓN DE RUTASEGURA</span>
+                <span className="rs-routes-recommendation-status">Análisis disponible</span>
               </div>
 
-              <div
-                style={{
-                  fontSize: 15,
-                  fontWeight: "bold",
-                  marginBottom: 6,
-                }}
-              >
+              <h3 className="rs-routes-recommendation-title">
                 {rutasAlternativas.find(
                   (alternativa: any) =>
                     alternativa.perfil_ruta ===
                     ruta.interpretacion_ia.recomendacion?.perfil_ruta,
                 )?.nombre_perfil_ruta ?? "Ruta recomendada"}
-              </div>
+              </h3>
 
-              <div
-                style={{
-                  fontSize: 13,
-                  lineHeight: 1.5,
-                  marginBottom: 8,
-                }}
-              >
-                {ruta.interpretacion_ia.recomendacion?.motivo}
-              </div>
+              {ruta.interpretacion_ia.recomendacion?.motivo && (
+                <p className="rs-routes-recommendation-reason">
+                  {ruta.interpretacion_ia.recomendacion.motivo}
+                </p>
+              )}
 
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "#374151",
-                  lineHeight: 1.5,
-                  borderTop: "1px solid #bbf7d0",
-                  paddingTop: 8,
-                }}
-              >
-                {ruta.interpretacion_ia.resumen_general}
-              </div>
+              {ruta.interpretacion_ia.resumen_general && (
+                <p className="rs-routes-recommendation-summary">
+                  {ruta.interpretacion_ia.resumen_general}
+                </p>
+              )}
 
-              {Array.isArray(
-                ruta.interpretacion_ia.consideraciones,
-              ) &&
+              {Array.isArray(ruta.interpretacion_ia.consideraciones) &&
                 ruta.interpretacion_ia.consideraciones.length > 0 && (
-                  <div style={{ marginTop: 10 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: "bold",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Consideraciones
-                    </div>
-
-                    {ruta.interpretacion_ia.consideraciones.map(
-                      (consideracion: string, indice: number) => (
-                        <div
-                          key={`${indice}-${consideracion}`}
-                          style={{
-                            fontSize: 12,
-                            lineHeight: 1.5,
-                            marginBottom: 4,
-                          }}
-                        >
-                          • {consideracion}
-                        </div>
-                      ),
-                    )}
+                  <div className="rs-routes-considerations">
+                    <h4>Consideraciones</h4>
+                    <ul>
+                      {ruta.interpretacion_ia.consideraciones.map(
+                        (consideracion: string, indice: number) => (
+                          <li key={`${indice}-${consideracion}`}>
+                            {consideracion}
+                          </li>
+                        ),
+                      )}
+                    </ul>
                   </div>
                 )}
 
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "#166534",
-                  marginTop: 10,
-                }}
-              >
-                Recomendación basada en las métricas disponibles.
-                No garantiza seguridad absoluta.
-              </div>
+              <p className="rs-routes-disclaimer">
+                Recomendación basada en las métricas disponibles. No garantiza seguridad absoluta.
+              </p>
             </section>
           )}
 
-          {/* La IA puede fallar sin ocultar las rutas */}
           {ruta.interpretacion_ia?.disponible === false && (
-            <div
-              role="status"
-              style={{
-                background: "#fff7ed",
-                border: "1px solid #fed7aa",
-                color: "#9a3412",
-                borderRadius: 6,
-                padding: 10,
-                marginBottom: 12,
-                fontSize: 12,
-                lineHeight: 1.5,
-              }}
-            >
+            <div className="rs-routes-ai-fallback" role="status">
               {ruta.interpretacion_ia.mensaje ??
                 "No fue posible generar la recomendación automática. Las rutas siguen disponibles."}
             </div>
           )}
 
-          {/* Todas las alternativas siguen visibles */}
-          {rutasAlternativas.map((alternativa: any) => {
-            const color =
-              alternativa.perfil_ruta === "menor_riesgo"
-                ? "#16a34a"
-                : alternativa.perfil_ruta === "equilibrada"
-                  ? "#2563eb"
-                  : "#ea580c";
+          <div className="rs-routes-list-header">
+            <div>
+              <h3>Compara las alternativas</h3>
+              <p>Selecciona una opción para destacarla en el mapa.</p>
+            </div>
+          </div>
 
-            const seleccionada =
-              rutaSeleccionada === alternativa.perfil_ruta;
+          <div className="rs-routes-list">
+            {rutasAlternativas.map((alternativa: any) => {
+              const color =
+                alternativa.perfil_ruta === "menor_riesgo"
+                  ? "#18877d"
+                  : alternativa.perfil_ruta === "equilibrada"
+                    ? "#285c55"
+                    : "#c47b32";
 
-            const interpretacionDisponible =
-              ruta.interpretacion_ia?.disponible === true;
+              const seleccionada =
+                rutaSeleccionada === alternativa.perfil_ruta;
 
-            const recomendada =
-              interpretacionDisponible &&
-              ruta.interpretacion_ia.recomendacion?.perfil_ruta ===
-                alternativa.perfil_ruta;
+              const interpretacionDisponible =
+                ruta.interpretacion_ia?.disponible === true;
 
-            const explicacion = interpretacionDisponible
-              ? ruta.interpretacion_ia.comparaciones?.find(
-                  (comparacion: any) =>
-                    comparacion.perfil_ruta === alternativa.perfil_ruta,
-                )?.explicacion
-              : null;
+              const recomendada =
+                interpretacionDisponible &&
+                ruta.interpretacion_ia.recomendacion?.perfil_ruta ===
+                  alternativa.perfil_ruta;
 
-            return (
-              <button
-                type="button"
-                key={alternativa.perfil_ruta}
-                aria-pressed={seleccionada}
-                onClick={() =>
-                  setRutaSeleccionada((actual) =>
-                    actual === alternativa.perfil_ruta
-                      ? null
-                      : alternativa.perfil_ruta,
-                  )
-                }
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  cursor: "pointer",
-                  color: "#1f2937",
-                  borderLeft: `4px solid ${color}`,
-                  borderTop: "1px solid #e5e7eb",
-                  borderRight: "1px solid #e5e7eb",
-                  borderBottom: "1px solid #e5e7eb",
-                  borderRadius: 6,
-                  padding: "10px",
-                  marginBottom: 9,
-                  background: seleccionada ? "#f0fdf4" : "#ffffff",
-                  fontFamily: "inherit",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    flexWrap: "wrap",
-                    fontWeight: "bold",
-                    fontSize: 14,
-                    marginBottom: 7,
-                  }}
+              const explicacion = interpretacionDisponible
+                ? ruta.interpretacion_ia.comparaciones?.find(
+                    (comparacion: any) =>
+                      comparacion.perfil_ruta === alternativa.perfil_ruta,
+                  )?.explicacion
+                : null;
+
+              const nivelRiesgo = String(
+                alternativa.nivel_riesgo ?? "No informado",
+              );
+              const nivelRiesgoNormalizado = nivelRiesgo.toLowerCase();
+              const riesgoClase = nivelRiesgoNormalizado.includes("alto")
+                ? "is-high"
+                : nivelRiesgoNormalizado.includes("medio")
+                  ? "is-medium"
+                  : nivelRiesgoNormalizado.includes("bajo")
+                    ? "is-low"
+                    : "is-unknown";
+
+              const puntajeRiesgo = Number(alternativa.puntaje_riesgo);
+              const puntajeVisible = Number.isFinite(puntajeRiesgo)
+                ? puntajeRiesgo.toFixed(2)
+                : "No disponible";
+
+              return (
+                <button
+                  type="button"
+                  key={alternativa.perfil_ruta}
+                  className={`rs-route-card${seleccionada ? " is-selected" : ""}${recomendada ? " is-recommended" : ""}`}
+                  style={{ borderLeftColor: color }}
+                  aria-pressed={seleccionada}
+                  onClick={() =>
+                    setRutaSeleccionada((actual) =>
+                      actual === alternativa.perfil_ruta
+                        ? null
+                        : alternativa.perfil_ruta,
+                    )
+                  }
                 >
-                  <span>{alternativa.nombre_perfil_ruta}</span>
+                  <span className="rs-route-card-topline">
+                    <span className="rs-route-card-title-group">
+                      <span className="rs-route-color-dot" style={{ backgroundColor: color }} aria-hidden="true" />
+                      <span className="rs-route-card-title">{alternativa.nombre_perfil_ruta}</span>
+                    </span>
+                    {recomendada && (
+                      <span className="rs-route-recommended-tag">Recomendada</span>
+                    )}
+                  </span>
 
-                  {recomendada && (
-                    <span
-                      style={{
-                        color: "#166534",
-                        background: "#dcfce7",
-                        borderRadius: 20,
-                        padding: "4px 7px",
-                        fontSize: 11,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      Recomendada por IA
+                  <span className="rs-route-card-metrics">
+                    <span className="rs-route-metric">
+                      <span className="rs-route-metric-label">Distancia</span>
+                      <strong>{formatearDistancia(Number(alternativa.distancia_metros))}</strong>
+                    </span>
+                    <span className="rs-route-metric">
+                      <span className="rs-route-metric-label">Tiempo estimado</span>
+                      <strong>
+                        {Number(alternativa.tiempo_estimado_minutos).toFixed(1)} min
+                      </strong>
+                    </span>
+                    <span className="rs-route-metric">
+                      <span className="rs-route-metric-label">Nivel de riesgo</span>
+                      <strong className={`rs-route-risk ${riesgoClase}`}>{nivelRiesgo}</strong>
+                    </span>
+                    <span className="rs-route-metric">
+                      <span className="rs-route-metric-label">Puntaje</span>
+                      <strong>{puntajeVisible}</strong>
+                    </span>
+                  </span>
+
+                  {explicacion && (
+                    <span className="rs-route-explanation">
+                      <strong>{recomendada ? "¿Por qué se recomienda?" : "Detalle de la comparación"}</strong>
+                      <span>{explicacion}</span>
                     </span>
                   )}
 
-                  {seleccionada && (
-                    <span style={{ color, fontSize: 12 }}>
-                      ✓ Seleccionada en el mapa
+                  <span className="rs-route-card-footer">
+                    <span className="rs-route-selection-hint">
+                      {seleccionada ? "Mostrando esta ruta en el mapa" : "Ver esta ruta en el mapa"}
                     </span>
-                  )}
-                </div>
-
-                <div style={{ fontSize: 13, marginBottom: 4 }}>
-                  Distancia:{" "}
-                  {formatearDistancia(
-                    Number(alternativa.distancia_metros),
-                  )}
-                  {" · "}
-                  Tiempo:{" "}
-                  {Number(
-                    alternativa.tiempo_estimado_minutos,
-                  ).toFixed(1)}{" "}
-                  min
-                </div>
-
-                <div style={{ fontSize: 13 }}>
-                  Riesgo: {alternativa.nivel_riesgo}
-                  {" · "}
-                  Puntaje:{" "}
-                  {Number(alternativa.puntaje_riesgo).toFixed(2)}
-                </div>
-
-                {explicacion && (
-                  <div
-                    style={{
-                      marginTop: 9,
-                      padding: 9,
-                      borderRadius: 6,
-                      background: recomendada ? "#f0fdf4" : "#f9fafb",
-                      border: `1px solid ${
-                        recomendada ? "#bbf7d0" : "#e5e7eb"
-                      }`,
-                      fontSize: 12,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: "bold",
-                        marginBottom: 4,
-                        color: recomendada ? "#166534" : "#374151",
-                      }}
-                    >
-                      {recomendada
-                        ? "¿Por qué se recomienda?"
-                        : "Interpretación de la IA"}
-                    </div>
-
-                    {explicacion}
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
+                    {seleccionada && <span className="rs-route-selected-tag">Seleccionada</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       )}
     </div>
   );
