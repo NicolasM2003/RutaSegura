@@ -1,0 +1,6791 @@
+﻿
+========== src/services/ruta.service.js ==========
+
+const {
+  obtenerGrafoPeatonal,
+} = require("./grafo-peatonal.service");
+
+const {
+  PERFILES_RUTA,
+} = require("../config/perfiles-ruta.config");
+const {
+  calcularCostoOperativoArista,
+  PESO_DISTANCIA,
+  PESO_RIESGO,
+} = require("./costo-ruta.service");
+
+const {
+  proyectarPuntoSobreSegmento,
+  obtenerAristaMasCercanaEnGrafo,
+  integrarProyeccionesEnGrafo,
+  crearSegmentoConexion,
+} = require("../utils/proyeccion-punto-segmento");
+
+const METROS_POR_GRADO_LATITUD = 111_320;
+const IDS_SEGMENTOS_RUTA = Symbol("idsSegmentosRuta");
+const METADATOS_SEGMENTOS_RUTA = Symbol("metadatosSegmentosRuta");
+const IDS_LEGACY_ARISTAS = new WeakMap();
+let siguienteIdLegacy = 0;
+const obtenerIdSegmento = (arista) => {
+  if (arista.id != null) return arista.id;
+  if (!IDS_LEGACY_ARISTAS.has(arista)) {
+    IDS_LEGACY_ARISTAS.set(arista, `legacy-arista-${++siguienteIdLegacy}`);
+  }
+  return IDS_LEGACY_ARISTAS.get(arista);
+};
+
+// Velocidad peatonal inicial para estimar el tiempo de recorrido.
+// Valor provisional: 1,2 metros por segundo.
+const VELOCIDAD_PEATONAL_METROS_SEGUNDO = 1.2;
+
+const MARGEN_BBOX_RUTA_METROS = (() => {
+  const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
+
+  return Number.isFinite(configurado) && configurado > 0
+    ? configurado
+    : 1_000;
+})();
+
+const limitar = (valor, minimo, maximo) =>
+  Math.min(maximo, Math.max(minimo, valor));
+
+const construirBboxRuta = (origen, destino) => {
+  const latitudes = [
+    Number(origen.latitud),
+    Number(destino.latitud),
+  ];
+
+  const longitudes = [
+    Number(origen.longitud),
+    Number(destino.longitud),
+  ];
+
+  const margenLatitud =
+    MARGEN_BBOX_RUTA_METROS /
+    METROS_POR_GRADO_LATITUD;
+
+  const latitudMayorEnValorAbsoluto =
+    Math.max(...latitudes.map(Math.abs));
+
+  const cosenoLatitud = Math.max(
+    Math.cos(
+      (latitudMayorEnValorAbsoluto * Math.PI) / 180
+    ),
+    0.01,
+  );
+
+  const margenLongitud =
+    margenLatitud / cosenoLatitud;
+
+  return {
+    minLat: limitar(
+      Math.min(...latitudes) - margenLatitud,
+      -90,
+      90
+    ),
+
+    minLon: limitar(
+      Math.min(...longitudes) - margenLongitud,
+      -180,
+      180
+    ),
+
+    maxLat: limitar(
+      Math.max(...latitudes) + margenLatitud,
+      -90,
+      90
+    ),
+
+    maxLon: limitar(
+      Math.max(...longitudes) + margenLongitud,
+      -180,
+      180
+    ),
+  };
+};
+
+/*
+ * Valida y normaliza las coordenadas de origen y destino.
+ */
+const normalizarCoordenadasRuta = ({
+  origen,
+  destino,
+}) => {
+  if (
+    !origen ||
+    !Number.isFinite(Number(origen.latitud)) ||
+    !Number.isFinite(Number(origen.longitud))
+  ) {
+    throw new Error(
+      "El origen debe contener latitud y longitud vÃ¡lidas."
+    );
+  }
+
+  if (
+    !destino ||
+    !Number.isFinite(Number(destino.latitud)) ||
+    !Number.isFinite(Number(destino.longitud))
+  ) {
+    throw new Error(
+      "El destino debe contener latitud y longitud vÃ¡lidas."
+    );
+  }
+
+  return {
+    latOrigen: Number(origen.latitud),
+    lonOrigen: Number(origen.longitud),
+    latDestino: Number(destino.latitud),
+    lonDestino: Number(destino.longitud),
+  };
+};
+
+/*
+ * Calcula distancia Haversine entre dos coordenadas.
+ */
+const distanciaHaversine = (
+  lat1,
+  lon1,
+  lat2,
+  lon2
+) => {
+  const R = 6371000;
+
+  const latitud1 = Number(lat1);
+  const longitud1 = Number(lon1);
+  const latitud2 = Number(lat2);
+  const longitud2 = Number(lon2);
+
+  if (
+    !Number.isFinite(latitud1) ||
+    !Number.isFinite(longitud1) ||
+    !Number.isFinite(latitud2) ||
+    !Number.isFinite(longitud2)
+  ) {
+    return Infinity;
+  }
+
+  const toRad = (grados) =>
+    (grados * Math.PI) / 180;
+
+  const dLat = toRad(
+    latitud2 - latitud1
+  );
+
+  const dLon = toRad(
+    longitud2 - longitud1
+  );
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(latitud1)) *
+      Math.cos(toRad(latitud2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a)
+    );
+
+  return R * c;
+};
+
+/*
+ * Busca el nodo del grafo mÃ¡s cercano
+ * a una coordenada.
+ */
+const obtenerNodoMasCercanoEnGrafo = (
+  nodos,
+  latitud,
+  longitud
+) => {
+  if (!Array.isArray(nodos)) {
+    throw new Error(
+      "Los nodos del grafo deben ser un arreglo."
+    );
+  }
+
+  if (nodos.length === 0) {
+    throw new Error(
+      "El grafo no contiene nodos."
+    );
+  }
+
+  const lat = Number(latitud);
+  const lon = Number(longitud);
+
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon)
+  ) {
+    throw new Error(
+      "Las coordenadas proporcionadas no son vÃ¡lidas."
+    );
+  }
+
+  let nodoMasCercano = null;
+  let distanciaMinima = Infinity;
+
+  for (const nodo of nodos) {
+    const nodoLatitud = Number(nodo.latitud);
+    const nodoLongitud = Number(nodo.longitud);
+
+    if (
+      !Number.isFinite(nodoLatitud) ||
+      !Number.isFinite(nodoLongitud)
+    ) {
+      continue;
+    }
+
+    const distancia = distanciaHaversine(
+      lat,
+      lon,
+      nodoLatitud,
+      nodoLongitud
+    );
+
+    if (distancia < distanciaMinima) {
+      distanciaMinima = distancia;
+      nodoMasCercano = nodo;
+    }
+  }
+
+  if (!nodoMasCercano) {
+    throw new Error(
+      "No se encontrÃ³ un nodo cercano."
+    );
+  }
+
+  return {
+    nodo: nodoMasCercano,
+    distancia_metros: Number(
+      distanciaMinima.toFixed(2)
+    ),
+  };
+};
+
+const prepararGrafoConProyeccionesRuta = (
+  grafo,
+  latOrigen,
+  lonOrigen,
+  latDestino,
+  lonDestino
+) => {
+  const origenProyectado = obtenerAristaMasCercanaEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    latOrigen,
+    lonOrigen
+  );
+
+  const destinoProyectado = obtenerAristaMasCercanaEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    latDestino,
+    lonDestino
+  );
+
+  // Validamos ambas proyecciones antes de acceder a sus propiedades.
+  // AsÃ­ evitamos un TypeError y entregamos un error controlado si no hay
+  // una arista peatonal disponible cerca de alguno de los puntos.
+  if (!origenProyectado || !destinoProyectado) {
+    throw new Error(
+      "No fue posible conectar el origen o destino con una arista peatonal."
+    );
+  }
+
+  const nodoDestinoMasCercano = obtenerNodoMasCercanoEnGrafo(
+    grafo.nodos,
+    latDestino,
+    lonDestino
+  );
+
+  console.log("RUTA - DiagnÃ³stico de proyecciÃ³n destino:", {
+    coordenadaSeleccionada: {
+      latitud: latDestino,
+      longitud: lonDestino,
+    },
+    aristaSeleccionada: {
+      id: destinoProyectado.arista.id,
+      id_osm: destinoProyectado.arista.id_osm,
+      nodo_origen: destinoProyectado.arista.nodo_origen,
+      nodo_destino: destinoProyectado.arista.nodo_destino,
+    },
+    coordenadasArista: {
+      origen: destinoProyectado.nodo_origen,
+      destino: destinoProyectado.nodo_destino,
+    },
+    fraccion: destinoProyectado.fraccion,
+    puntoProyectado: destinoProyectado.punto,
+    distanciaProyeccion:
+      destinoProyectado.distancia_proyeccion_metros,
+    nodoMasCercano: {
+      id: nodoDestinoMasCercano.nodo.id,
+      latitud: nodoDestinoMasCercano.nodo.latitud,
+      longitud: nodoDestinoMasCercano.nodo.longitud,
+      distancia: nodoDestinoMasCercano.distancia_metros,
+    },
+  });
+
+  const grafoIntegrado = integrarProyeccionesEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    [
+      {
+        id: "origen",
+        arista: origenProyectado.arista,
+        fraccion: origenProyectado.fraccion,
+        punto: origenProyectado.punto,
+      },
+      {
+        id: "destino",
+        arista: destinoProyectado.arista,
+        fraccion: destinoProyectado.fraccion,
+        punto: destinoProyectado.punto,
+      },
+    ]
+  );
+
+  if (!grafoIntegrado) {
+    throw new Error(
+      "No fue posible integrar las proyecciones al grafo peatonal."
+    );
+  }
+
+  const nodosMap = new Map(
+    grafoIntegrado.nodos.map((nodo) => [nodo.id, nodo])
+  );
+
+  const obtenerConexion = (id, proyeccion) => {
+    const idNodo = grafoIntegrado.nodos_por_proyeccion[id];
+    const nodo = nodosMap.get(idNodo);
+
+    if (!nodo) {
+      throw new Error(
+        `No se encontrÃ³ el nodo virtual correspondiente a ${id}.`
+      );
+    }
+
+    return {
+      nodo,
+      arista: proyeccion.arista,
+      distancia_metros: proyeccion.distancia_proyeccion_metros,
+      punto_proyectado: proyeccion.punto,
+    };
+  };
+
+  return {
+    grafo: {
+      ...grafo,
+      ...grafoIntegrado,
+      resumen: grafo.resumen
+        ? {
+            ...grafo.resumen,
+            cantidad_nodos: grafoIntegrado.nodos.length,
+            cantidad_aristas: grafoIntegrado.aristas.length,
+          }
+        : grafo.resumen,
+    },
+
+    origen: obtenerConexion("origen", origenProyectado),
+    destino: obtenerConexion("destino", destinoProyectado),
+  };
+};
+
+/*
+ * Valida el grafo peatonal obtenido.
+ */
+const validarGrafoPeatonal = (grafo) => {
+  if (!grafo?.nodos || !grafo?.aristas) {
+    throw new Error(
+      "El grafo peatonal no contiene nodos o aristas."
+    );
+  }
+
+  if (
+    grafo.nodos.length === 0 ||
+    grafo.aristas.length === 0
+  ) {
+    throw new Error(
+      "No existe una red peatonal disponible para la comuna."
+    );
+  }
+
+  return grafo;
+};
+
+/*
+ * Obtiene el grafo para un trayecto.
+ *
+ * Esta funciÃ³n se ejecuta una sola vez en
+ * calcularRutasAlternativas().
+ */
+const obtenerGrafoRuta = async ({
+  comuna,
+  origen,
+  destino,
+  rangoHorario,
+}) => {
+  const bboxRuta = construirBboxRuta(
+    origen,
+    destino
+  );
+
+  const grafo = await obtenerGrafoPeatonal({
+    comuna,
+    rangoHorario,
+    bbox: bboxRuta,
+    soloSupabase: true,
+  });
+
+  return validarGrafoPeatonal(grafo);
+};
+
+/*
+ * Cola de prioridad simple para Dijkstra.
+ */
+class ColaPrioridad {
+  constructor() {
+    this.items = [];
+  }
+
+  insertar(item, prioridad) {
+    this.items.push({
+      item,
+      prioridad,
+    });
+
+    this.items.sort(
+      (a, b) => a.prioridad - b.prioridad
+    );
+  }
+
+  extraerMinimo() {
+    return this.items.shift();
+  }
+
+  get size() {
+    return this.items.length;
+  }
+};
+
+/*
+ * Construye la lista de vecinos de cada nodo.
+ * Las aristas son bidireccionales.
+ */
+const construirAdyacencia = (aristas) => {
+  const adyacencia = new Map();
+
+  for (const arista of aristas) {
+    if (!adyacencia.has(arista.nodo_origen)) {
+      adyacencia.set(arista.nodo_origen, []);
+    }
+
+    if (!adyacencia.has(arista.nodo_destino)) {
+      adyacencia.set(arista.nodo_destino, []);
+    }
+
+    adyacencia.get(arista.nodo_origen).push({
+      nodo: arista.nodo_destino,
+      arista,
+    });
+
+    adyacencia.get(arista.nodo_destino).push({
+      nodo: arista.nodo_origen,
+      arista,
+    });
+  }
+
+  return adyacencia;
+};
+
+/*
+ * Calcula el costo de una arista segÃºn el perfil.
+ *
+ * Sin perfil, conserva la ponderaciÃ³n base 30/70 del grafo.
+ */
+const calcularCostoArista = (
+  arista,
+  perfil = null,
+  { factorPenalizacion = 0, usosSegmento = 0 } = {}
+) => {
+  const distancia = Number(
+    arista.distancia_metros
+  );
+
+  const puntajeRiesgo = Number(
+    arista.puntaje_riesgo
+  );
+
+  const riesgoNormalizado = puntajeRiesgo / 100;
+
+  const costoOriginal = calcularCostoOperativoArista(
+    distancia,
+    riesgoNormalizado,
+    perfil?.peso_distancia ?? PESO_DISTANCIA,
+    perfil?.peso_riesgo ?? PESO_RIESGO
+  );
+  return costoOriginal * (1 + factorPenalizacion * usosSegmento);
+};
+
+/*
+ * Algoritmo Dijkstra.
+ *
+ * Utiliza costo_arista si no hay perfil.
+ * Si existe perfil, calcula el costo de cada arista
+ * usando las ponderaciones de riesgo y distancia.
+ */
+const dijkstra = ({
+  nodos,
+  aristas,
+  nodoOrigen,
+  nodoDestino,
+  perfil = null,
+  factorPenalizacion = 0,
+  usosSegmento = new Map(),
+}) => {
+  const adyacencia = construirAdyacencia(aristas);
+
+  const nodosMap = new Map(
+    nodos.map((nodo) => [nodo.id, nodo])
+  );
+
+  const distancias = new Map();
+  const anteriores = new Map();
+  const aristasAnteriores = new Map();
+
+  for (const idNodo of nodosMap.keys()) {
+    distancias.set(idNodo, Infinity);
+  }
+
+  distancias.set(nodoOrigen, 0);
+
+  const cola = new ColaPrioridad();
+  cola.insertar(nodoOrigen, 0);
+
+  while (cola.size > 0) {
+    const actual = cola.extraerMinimo();
+    const nodoActual = actual.item;
+    const distanciaActual = actual.prioridad;
+
+    if (
+      distanciaActual >
+      distancias.get(nodoActual)
+    ) {
+      continue;
+    }
+
+    if (nodoActual === nodoDestino) {
+      break;
+    }
+
+    const vecinos =
+      adyacencia.get(nodoActual) || [];
+
+    for (const vecino of vecinos) {
+      let costo;
+      try {
+        const usos = usosSegmento.get(obtenerIdSegmento(vecino.arista)) || 0;
+        costo = calcularCostoArista(vecino.arista, perfil, {
+          factorPenalizacion,
+          usosSegmento: usos,
+        });
+      } catch {
+        continue;
+      }
+
+      if (
+        !Number.isFinite(costo) ||
+        costo < 0
+      ) {
+        continue;
+      }
+
+      const nuevaDistancia =
+        distanciaActual + costo;
+
+      const distanciaAnterior =
+        distancias.get(vecino.nodo);
+
+      if (nuevaDistancia < distanciaAnterior) {
+        distancias.set(
+          vecino.nodo,
+          nuevaDistancia
+        );
+
+        anteriores.set(
+          vecino.nodo,
+          nodoActual
+        );
+
+        aristasAnteriores.set(
+          vecino.nodo,
+          vecino.arista
+        );
+
+        cola.insertar(
+          vecino.nodo,
+          nuevaDistancia
+        );
+      }
+    }
+  }
+
+  const distanciaDestino =
+    distancias.get(nodoDestino);
+
+  if (!Number.isFinite(distanciaDestino)) {
+    return null;
+  }
+
+  const nodosRuta = [];
+  const aristasRuta = [];
+
+  let actual = nodoDestino;
+
+  while (actual !== nodoOrigen) {
+    nodosRuta.unshift(actual);
+
+    const arista =
+      aristasAnteriores.get(actual);
+
+    if (!arista) {
+      return null;
+    }
+
+    aristasRuta.unshift(arista);
+
+    actual = anteriores.get(actual);
+
+    if (!actual) {
+      return null;
+    }
+  }
+
+  nodosRuta.unshift(nodoOrigen);
+
+  return {
+    nodosRuta,
+    aristasRuta,
+    costoTotal: distanciaDestino,
+  };
+};
+
+/*
+ * Construye el resumen de la ruta encontrada.
+ */
+const calcularResumenRuta = ({
+  aristasRuta,
+  costoTotal,
+}) => {
+  let distanciaTotal = 0;
+  let riesgoPonderado = 0;
+
+  const zonas = new Set();
+
+  for (const arista of aristasRuta) {
+    const distancia =
+      Number(arista.distancia_metros) || 0;
+
+    const riesgo =
+      Number(arista.puntaje_riesgo) || 0;
+
+    distanciaTotal += distancia;
+    riesgoPonderado += riesgo * distancia;
+
+    if (Array.isArray(arista.zonas_intersectadas)) {
+      for (const zona of arista.zonas_intersectadas) {
+        if (zona?.id_zona) {
+          zonas.add(zona.id_zona);
+        }
+      }
+    }
+  }
+
+  const puntajeRiesgo =
+    distanciaTotal > 0
+      ? riesgoPonderado / distanciaTotal
+      : 0;
+
+  const tiempoEstimadoSegundos =
+  distanciaTotal /
+  VELOCIDAD_PEATONAL_METROS_SEGUNDO;
+
+  const tiempoEstimadoMinutos =
+    Number((tiempoEstimadoSegundos / 60).toFixed(1));
+
+  let nivelRiesgo = "Bajo";
+
+  if (puntajeRiesgo > 66) {
+    nivelRiesgo = "Alto";
+  } else if (puntajeRiesgo > 33) {
+    nivelRiesgo = "Medio";
+  }
+
+  return {
+    distancia_metros: Number(
+      distanciaTotal.toFixed(2)
+    ),
+
+    tiempo_estimado_minutos:
+      tiempoEstimadoMinutos,
+
+    costo_navegacion: costoTotal,
+
+    puntaje_riesgo: Number(
+      puntajeRiesgo.toFixed(2)
+    ),
+
+    nivel_riesgo: nivelRiesgo,
+
+    cantidad_segmentos: aristasRuta.length,
+
+    zonas_riesgo_afectadas: Array.from(zonas),
+
+    geometria: [],
+  };
+};
+
+/*
+ * Construye las coordenadas de la ruta.
+ */
+const construirGeometriaRuta = (
+  nodosMap,
+  nodosRuta
+) => {
+  return nodosRuta
+    .map((idNodo) => nodosMap.get(idNodo))
+    .filter(Boolean)
+    .map((nodo) => [
+      Number(nodo.latitud),
+      Number(nodo.longitud),
+    ]);
+};
+
+/*
+ * Calcula una ruta para un perfil especÃ­fico.
+ *
+ * grafoPrecalculado permite reutilizar un mismo
+ * grafo cuando se generan varias alternativas.
+ */
+const calcularRutaSegura = async ({
+  comuna,
+  origen,
+  destino,
+  rangoHorario,
+  perfilRuta = null,
+  grafoPrecalculado = null,
+  conexionesProyectadas = null,
+  factorPenalizacion = 0,
+  usosSegmento = new Map(),
+}) => {
+  const perfil = perfilRuta
+    ? PERFILES_RUTA[perfilRuta]
+    : null;
+
+  if (perfilRuta && !perfil) {
+    throw new Error(
+      `Perfil de ruta no vÃ¡lido: ${perfilRuta}`
+    );
+  }
+
+  const {
+    latOrigen,
+    lonOrigen,
+    latDestino,
+    lonDestino,
+  } = normalizarCoordenadasRuta({
+    origen,
+    destino,
+  });
+
+  console.log(
+    `RUTA - Calculando ${comuna || "Ã¡rea del mapa"}`
+  );
+
+  console.log(
+    `RUTA - Origen: ${latOrigen}, ${lonOrigen}`
+  );
+
+  console.log(
+    `RUTA - Destino: ${latDestino}, ${lonDestino}`
+  );
+
+  if (perfilRuta) {
+    console.log(
+      `RUTA - Perfil: ${perfil.nombre}`
+    );
+  }
+
+  const grafo = validarGrafoPeatonal(
+    grafoPrecalculado ||
+      await obtenerGrafoRuta({
+        comuna,
+
+        origen: {
+          latitud: latOrigen,
+          longitud: lonOrigen,
+        },
+
+        destino: {
+          latitud: latDestino,
+          longitud: lonDestino,
+        },
+
+        rangoHorario,
+      })
+  );
+
+  const obtenerNodoTerminal = (
+    conexionProyectada,
+    latitud,
+    longitud
+  ) => {
+    if (!conexionProyectada?.nodo?.id) {
+      return obtenerNodoMasCercanoEnGrafo(
+        grafo.nodos,
+        latitud,
+        longitud
+      );
+    }
+
+    const nodo = grafo.nodos.find(
+      (elemento) => elemento.id === conexionProyectada.nodo.id
+    );
+
+    if (!nodo) {
+      throw new Error(
+        "El nodo proyectado no existe en el grafo."
+      );
+    }
+
+    return {
+      nodo,
+      distancia_metros:
+        Number(conexionProyectada.distancia_metros) || 0,
+    };
+  };
+
+  const origenCercano = obtenerNodoTerminal(
+    conexionesProyectadas?.origen,
+    latOrigen,
+    lonOrigen
+  );
+
+  const destinoCercano = obtenerNodoTerminal(
+    conexionesProyectadas?.destino,
+    latDestino,
+    lonDestino
+  );
+
+  console.log(
+    `RUTA - Nodo origen: ${origenCercano.nodo.id} (${origenCercano.distancia_metros} m)`
+  );
+
+  console.log(
+    `RUTA - Nodo destino: ${destinoCercano.nodo.id} (${destinoCercano.distancia_metros} m)`
+  );
+
+  const resultadoDijkstra = dijkstra({
+    nodos: grafo.nodos,
+    aristas: grafo.aristas,
+
+    nodoOrigen: origenCercano.nodo.id,
+    nodoDestino: destinoCercano.nodo.id,
+
+    perfil,
+    factorPenalizacion,
+    usosSegmento,
+  });
+
+  if (!resultadoDijkstra) {
+    return {
+      encontrada: false,
+
+      mensaje:
+        "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.",
+
+      origen: {
+        latitud: latOrigen,
+        longitud: lonOrigen,
+      },
+
+      destino: {
+        latitud: latDestino,
+        longitud: lonDestino,
+      },
+    };
+  }
+
+  const construirConectorRuta = (
+    id,
+    conexion,
+    coordenadaSeleccionada,
+    invertirSentido = false
+  ) => {
+    if (!conexion) return null;
+
+    const distancia = Number(conexion.distancia_metros) || 0;
+
+    if (distancia <= 0) return null;
+
+    const conector = crearSegmentoConexion({
+      id,
+      coordenadaSeleccionada,
+      puntoProyectado: conexion.punto_proyectado,
+      distanciaMetros: distancia,
+      aristaReferencia: conexion.arista,
+    });
+
+    if (!conector) {
+      throw new Error(
+        `No fue posible construir el conector de ${id}.`
+      );
+    }
+
+    if (invertirSentido) {
+      return {
+        ...conector,
+        inicio: conector.fin,
+        fin: conector.inicio,
+      };
+    }
+
+    return conector;
+  };
+
+  const conectorOrigen = construirConectorRuta(
+    "origen",
+    conexionesProyectadas?.origen,
+    {
+      latitud: latOrigen,
+      longitud: lonOrigen,
+    }
+  );
+
+  const conectorDestino = construirConectorRuta(
+    "destino",
+    conexionesProyectadas?.destino,
+    {
+      latitud: latDestino,
+      longitud: lonDestino,
+    },
+    true
+  );
+
+  const aristasParaResumen = [
+    ...(conectorOrigen ? [conectorOrigen] : []),
+    ...resultadoDijkstra.aristasRuta,
+    ...(conectorDestino ? [conectorDestino] : []),
+  ];
+
+  const distanciaRed = resultadoDijkstra.aristasRuta.reduce(
+    (total, arista) =>
+      total + (Number(arista.distancia_metros) || 0),
+    0
+  );
+
+  console.log("RUTA - DiagnÃ³stico de distancia:", {
+    conectorOrigen: conectorOrigen?.distancia_metros ?? 0,
+    conectorDestino: conectorDestino?.distancia_metros ?? 0,
+    distanciaRed: Number(distanciaRed.toFixed(2)),
+    distanciaTotal: Number(
+      aristasParaResumen.reduce(
+        (total, arista) =>
+          total + (Number(arista.distancia_metros) || 0),
+        0
+      ).toFixed(2)
+    ),
+  });
+
+  const nodosMap = new Map(
+    grafo.nodos.map((nodo) => [nodo.id, nodo])
+  );
+
+  const resumen = calcularResumenRuta({
+    aristasRuta: aristasParaResumen,
+    costoTotal: aristasParaResumen.reduce(
+      (total, arista) =>
+        total + calcularCostoArista(arista, perfil),
+      0
+    ),
+  });
+
+  const geometriaRed = construirGeometriaRuta(
+    nodosMap,
+    resultadoDijkstra.nodosRuta
+  );
+
+  const geometriaCompleta = [
+    [latOrigen, lonOrigen],
+    ...geometriaRed,
+    [latDestino, lonDestino],
+  ];
+
+  resumen.geometria = geometriaCompleta.filter(
+    (coordenada, indice, arreglo) => {
+      if (indice === 0) return true;
+
+      const anterior = arreglo[indice - 1];
+
+      return distanciaHaversine(
+        anterior[0],
+        anterior[1],
+        coordenada[0],
+        coordenada[1]
+      ) > 0.01;
+    }
+  );
+
+  console.log(
+    `RUTA - Encontrada: ${resultadoDijkstra.aristasRuta.length} segmentos`
+  );
+
+  console.log(
+    `RUTA - Distancia: ${resumen.distancia_metros} m`
+  );
+
+  console.log(
+    `RUTA - Costo: ${resumen.costo_navegacion}`
+  );
+
+  console.log(
+    `RUTA - Riesgo: ${resumen.puntaje_riesgo} (${resumen.nivel_riesgo})`
+  );
+
+  return {
+    encontrada: true,
+
+    origen: {
+      latitud: latOrigen,
+      longitud: lonOrigen,
+
+      nodo_mas_cercano: origenCercano.nodo.id,
+
+      distancia_al_nodo_metros:
+        origenCercano.distancia_metros,
+    },
+
+    destino: {
+      latitud: latDestino,
+      longitud: lonDestino,
+
+      nodo_mas_cercano: destinoCercano.nodo.id,
+
+      distancia_al_nodo_metros:
+        destinoCercano.distancia_metros,
+    },
+
+    ...resumen,
+
+    ...(perfilRuta
+      ? {
+          perfil_ruta: perfilRuta,
+          nombre_perfil_ruta: perfil.nombre,
+        }
+      : {}),
+
+    nodos_ruta: resultadoDijkstra.nodosRuta,
+    [IDS_SEGMENTOS_RUTA]: resultadoDijkstra.aristasRuta.map(obtenerIdSegmento),
+    // Metadatos internos para comparar corredores. Los Symbols no forman
+    // parte del JSON pÃºblico ni alteran el contrato HTTP.
+    [METADATOS_SEGMENTOS_RUTA]: resultadoDijkstra.aristasRuta.map((arista) => {
+      const nodoOrigen = nodosMap.get(arista.nodo_origen);
+      const nodoDestino = nodosMap.get(arista.nodo_destino);
+      return {
+        id: obtenerIdSegmento(arista),
+        id_osm: arista.id_osm,
+        nodo_origen: arista.nodo_origen,
+        nodo_destino: arista.nodo_destino,
+        distancia_metros: Number(arista.distancia_metros),
+        nombre: arista.nombre,
+        tipo: arista.tipo,
+        categoria_peatonal: arista.categoria_peatonal,
+        superficie: arista.superficie,
+        acceso_peatonal: arista.acceso_peatonal,
+        sidewalk: arista.sidewalk,
+        footway: arista.footway,
+        crossing: arista.crossing,
+        inicio: nodoOrigen && [Number(nodoOrigen.longitud), Number(nodoOrigen.latitud)],
+        fin: nodoDestino && [Number(nodoDestino.longitud), Number(nodoDestino.latitud)],
+      };
+    }),
+
+    segmentos: (() => {
+      let costoAcumulado = 0;
+
+      return aristasParaResumen.map(
+        (arista) => {
+          const costoSegmento = calcularCostoArista(arista, perfil);
+          costoAcumulado += costoSegmento;
+
+          return {
+            id: obtenerIdSegmento(arista),
+
+            es_conector: arista.es_conector === true,
+            riesgo_estimado: arista.riesgo_estimado === true,
+            arista_referencia_id: arista.arista_referencia_id ?? null,
+
+            inicio: arista.inicio ?? (
+              nodosMap.get(arista.nodo_origen)
+                ? [
+                    Number(nodosMap.get(arista.nodo_origen).latitud),
+                    Number(nodosMap.get(arista.nodo_origen).longitud),
+                  ]
+                : null
+            ),
+
+            fin: arista.fin ?? (
+              nodosMap.get(arista.nodo_destino)
+                ? [
+                    Number(nodosMap.get(arista.nodo_destino).latitud),
+                    Number(nodosMap.get(arista.nodo_destino).longitud),
+                  ]
+                : null
+            ),
+
+            id_osm: arista.id_osm,
+
+            nodo_origen: arista.nodo_origen,
+            nodo_destino: arista.nodo_destino,
+
+            distancia_metros: arista.distancia_metros,
+
+            puntaje_riesgo: arista.puntaje_riesgo,
+            nivel_riesgo: arista.nivel_riesgo,
+
+            costo_riesgo: arista.costo_riesgo,
+            costo_distancia: arista.costo_distancia,
+
+            // Publicamos la misma precisiÃ³n usada por Dijkstra. Redondear cada
+            // segmento por separado harÃ­a que su suma difiriera del costo total.
+            costo_arista: costoSegmento,
+            costo_arista_operativo: costoSegmento,
+            costo_acumulado_ruta: costoAcumulado,
+
+            zonas_intersectadas:
+              arista.zonas_intersectadas,
+
+            nombre: arista.nombre,
+            tipo: arista.tipo,
+
+            categoria_peatonal:
+              arista.categoria_peatonal,
+          };
+        }
+      );
+    })(),
+  };
+};
+
+/*
+ * ParÃ¡metros para detectar recorridos redundantes.
+ *
+ * Dos rutas con al menos un 90 % de distancia compartida
+ * por las mismas calles se consideran similares.
+ *
+ * Si sus puntajes de riesgo difieren en 8 puntos o mÃ¡s,
+ * se conservan ambas por posible relevancia de seguridad.
+ */
+const UMBRAL_SIMILITUD_CORREDOR = 0.90;
+const DIFERENCIA_RIESGO_RELEVANTE = 8;
+
+const FACTORES_PENALIZACION_RECUPERACION = [
+  0.25,
+  0.50,
+  0.75,
+];
+
+// LÃ­mites geomÃ©tricos provisionales de esta implementaciÃ³n; sujetos a la
+// validaciÃ³n de frontend de SEG-175 y a la revisiÃ³n de calibraciÃ³n.
+const ANGULO_MAXIMO_CORREDOR_GRADOS = 25;
+const SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS = 3;
+const SEPARACION_MAXIMA_VIA_CONTINUA_METROS = 8;
+const SEPARACION_MAXIMA_ACERAS_OPUESTAS_METROS = 12;
+const DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS = 5;
+
+/*
+ * Normaliza el nombre de una calle para comparar variantes como:
+ *
+ * "Avenida Libertad" -> "libertad"
+ * "Av. Libertad"     -> "libertad"
+ * "Libertad"         -> "libertad"
+ *
+ * Esto permite comparar aceras representadas mediante
+ * distintos elementos de OpenStreetMap.
+ */
+const normalizarNombreVia = (nombre) => {
+  if (typeof nombre !== "string" || !nombre.trim()) {
+    return null;
+  }
+
+  const normalizado = nombre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(
+      /\b(?:avenida|avda|av|calle|pasaje|pje|camino|ruta|diagonal|paseo|caletera)\b/g,
+      " "
+    )
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalizado || null;
+};
+
+const proyectarPuntoLocal = (punto, referencia) => {
+  const latitudMedia = ((punto[1] + referencia[1]) / 2) * Math.PI / 180;
+  return [
+    (punto[0] - referencia[0]) * METROS_POR_GRADO_LATITUD * Math.cos(latitudMedia),
+    (punto[1] - referencia[1]) * METROS_POR_GRADO_LATITUD,
+  ];
+};
+
+/* Longitud longitudinal comÃºn entre dos aristas rectas, con orientaciÃ³n reversible. */
+const medirSolapamientoGeometrico = (a, b) => {
+  if (!a.inicio || !a.fin || !b.inicio || !b.fin) return null;
+  const origen = a.inicio;
+  const p1 = [0, 0];
+  const p2 = proyectarPuntoLocal(a.fin, origen);
+  const q1 = proyectarPuntoLocal(b.inicio, origen);
+  const q2 = proyectarPuntoLocal(b.fin, origen);
+  const ax = p2[0] - p1[0]; const ay = p2[1] - p1[1];
+  const bx = q2[0] - q1[0]; const by = q2[1] - q1[1];
+  const longitudA = Math.hypot(ax, ay); const longitudB = Math.hypot(bx, by);
+  if (longitudA < 0.5 || longitudB < 0.5) return null;
+  const coseno = Math.abs((ax * bx + ay * by) / (longitudA * longitudB));
+  const angulo = Math.acos(Math.min(1, coseno)) * 180 / Math.PI;
+  if (angulo > ANGULO_MAXIMO_CORREDOR_GRADOS) return null;
+  const ux = ax / longitudA; const uy = ay / longitudA;
+  const proyecciones = [
+    q1[0] * ux + q1[1] * uy,
+    q2[0] * ux + q2[1] * uy,
+  ];
+  const inicio = Math.max(0, Math.min(...proyecciones));
+  const fin = Math.min(longitudA, Math.max(...proyecciones));
+  const solapamiento = Math.max(0, fin - inicio);
+  if (solapamiento <= 0) return null;
+  // SeparaciÃ³n perpendicular (no punto a segmento acotado), para que una
+  // subdivisiÃ³n que sobrepasa longitudinalmente al otro tramo siga solapando.
+  const separaciones = [q1, q2].map((q) => Math.abs(q[0] * uy - q[1] * ux));
+  const separacion = (separaciones[0] + separaciones[1]) / 2;
+  // El solapamiento relativo se evalÃºa al unir intervalos de la ruta completa,
+  // no por arista: cortes OSM pequeÃ±os no deben romper una continuidad vÃ¡lida.
+  const ubx = bx / longitudB; const uby = by / longitudB;
+  const proyeccionesB = [p1, p2].map((p) => (p[0] - q1[0]) * ubx + (p[1] - q1[1]) * uby);
+  const inicioB = Math.max(0, Math.min(...proyeccionesB));
+  const finB = Math.min(longitudB, Math.max(...proyeccionesB));
+  return {
+    longitud: Math.min(solapamiento, longitudA, longitudB),
+    separacion,
+    inicio: inicio / longitudA,
+    fin: fin / longitudA,
+    inicioB: inicioB / longitudB,
+    finB: finB / longitudB,
+  };
+};
+
+const esCrucePeatonal = (segmento) =>
+  segmento && (segmento.footway === "crossing" || segmento.crossing != null);
+
+const distanciaPuntoAArista = (punto, arista) => {
+  if (!punto || !arista?.inicio || !arista?.fin) return Infinity;
+  const extremo = proyectarPuntoLocal(arista.fin, arista.inicio);
+  const objetivo = proyectarPuntoLocal(punto, arista.inicio);
+  const largo2 = extremo[0] ** 2 + extremo[1] ** 2;
+  if (largo2 === 0) return Math.hypot(objetivo[0], objetivo[1]);
+  const t = Math.max(0, Math.min(1, (objetivo[0] * extremo[0] + objetivo[1] * extremo[1]) / largo2));
+  return Math.hypot(objetivo[0] - t * extremo[0], objetivo[1] - t * extremo[1]);
+};
+
+const cruceConectaAristas = (cruces, a, b) => (cruces || []).some((cruce) => {
+  if (!cruce.inicio || !cruce.fin) return false;
+  const extremos = [cruce.inicio, cruce.fin];
+  const conectaEnSentidoDirecto =
+    distanciaPuntoAArista(extremos[0], a) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS &&
+    distanciaPuntoAArista(extremos[1], b) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS;
+  const conectaEnSentidoInverso =
+    distanciaPuntoAArista(extremos[1], a) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS &&
+    distanciaPuntoAArista(extremos[0], b) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS;
+  return conectaEnSentidoDirecto || conectaEnSentidoInverso;
+});
+
+const obtenerSegmentosComparables = (ruta) => {
+  const segmentos = Array.isArray(
+    ruta?.[METADATOS_SEGMENTOS_RUTA]
+  )
+    ? ruta[METADATOS_SEGMENTOS_RUTA]
+    : (ruta?.segmentos || []).map((segmento) => ({
+        ...segmento,
+      }));
+
+  // Los conectores no representan calles de OpenStreetMap.
+  return segmentos.filter(
+    (segmento) => segmento?.es_conector !== true
+  );
+};
+
+const evaluarCoincidenciaCorredor = (a, b, crucesA = [], crucesB = []) => {
+  const distanciaA = Number(a.distancia_metros);
+  const distanciaB = Number(b.distancia_metros);
+  if (!(distanciaA > 0) || !(distanciaB > 0) || esCrucePeatonal(a) || esCrucePeatonal(b)) return null;
+
+  const nodosMismos = a.nodo_origen != null && a.nodo_destino != null &&
+    ((String(a.nodo_origen) === String(b.nodo_origen) && String(a.nodo_destino) === String(b.nodo_destino)) ||
+     (String(a.nodo_origen) === String(b.nodo_destino) && String(a.nodo_destino) === String(b.nodo_origen)));
+  const osmMismo = a.id_osm != null && String(a.id_osm) === String(b.id_osm);
+  if (osmMismo && nodosMismos) return {
+    longitud: Math.min(distanciaA, distanciaB), exacta: true,
+    inicio: 0, fin: 1, inicioB: 0, finB: 1,
+  };
+
+  const nombreA = normalizarNombreVia(a.nombre);
+  const nombreB = normalizarNombreVia(b.nombre);
+  const mismoNombre = Boolean(nombreA && nombreA === nombreB);
+  const mismoNodoExtremo = [a.nodo_origen, a.nodo_destino].some((nodo) =>
+    nodo != null && [b.nodo_origen, b.nodo_destino].some((otro) => String(nodo) === String(otro)));
+  const acerasOpuestas = ["left", "right"].includes(a.sidewalk) &&
+    ["left", "right"].includes(b.sidewalk) && a.sidewalk !== b.sidewalk;
+  const cruceConectado = cruceConectaAristas([...crucesA, ...crucesB], a, b);
+  const solapamiento = medirSolapamientoGeometrico(a, b);
+  if (!solapamiento) return null;
+
+  // Tolerancia amplia solo con evidencia semÃ¡ntica de aceras opuestas en la
+  // misma calle. Proximidad/paralelismo por sÃ­ solos nunca crean equivalencia.
+  if (mismoNombre && (acerasOpuestas || cruceConectado) && solapamiento.separacion <= SEPARACION_MAXIMA_ACERAS_OPUESTAS_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // En rutas distintas, OSM puede modelar una misma calle/acera con nodos y
+  // ways independientes. Nombre normalizado + orientaciÃ³n + solapamiento
+  // longitudinal local permiten reconocer el corredor aun sin nodos comunes.
+  // La suma posterior une intervalos y el filtro exige 90 % de la ruta mayor;
+  // una calle paralela con otro nombre no se fusiona por distancia solamente.
+  if (mismoNombre && solapamiento.separacion <= SEPARACION_MAXIMA_VIA_CONTINUA_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // Para nombres diferentes o ausentes exigimos una superposiciÃ³n casi fÃ­sica
+  // y continuidad topolÃ³gica (un extremo comÃºn); evita unir calles cercanas.
+  if (solapamiento.separacion <= SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS && mismoNodoExtremo) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // El mismo nombre puede respaldar una coincidencia casi fÃ­sica si tambiÃ©n
+  // hay solapamiento longitudinal y orientaciÃ³n compatible.
+  if (mismoNombre && solapamiento.separacion <= SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  return null;
+};
+
+const esSegmentoFootway = (segmento) =>
+  ["footway", "path"].includes(String(segmento.tipo || "").toLowerCase()) &&
+  !esCrucePeatonal(segmento);
+
+const esConectorTerminalCorto = (segmento) => {
+  if (!segmento || esCrucePeatonal(segmento)) return false;
+
+  const tipo = String(segmento.tipo || "").toLowerCase();
+  const distancia = Number(segmento.distancia_metros);
+
+  return (
+    ["residential", "unclassified", "service", "living_street"].includes(tipo) &&
+    Number.isFinite(distancia) &&
+    distancia > 0 &&
+    distancia <= 10
+  );
+};
+
+const esSubrutaFootway = (segmentos) => {
+  if (!Array.isArray(segmentos) || segmentos.length === 0) {
+    return false;
+  }
+
+  const indicesNoFootway = segmentos
+    .map((segmento, indice) => ({
+      segmento,
+      indice,
+    }))
+    .filter(({ segmento }) => !esSegmentoFootway(segmento));
+
+  // Una secuencia compuesta exclusivamente por footways es vÃ¡lida.
+  if (indicesNoFootway.length === 0) return true;
+
+  // Solo permitimos un conector corto en uno de los extremos.
+  if (indicesNoFootway.length !== 1) return false;
+
+  const { segmento, indice } = indicesNoFootway[0];
+
+  const esExtremo =
+    indice === 0 || indice === segmentos.length - 1;
+
+  return esExtremo && esConectorTerminalCorto(segmento);
+};
+
+const esSubrutaCalleNombrada = (segmentos) => {
+  if (!segmentos.length || segmentos.some(esCrucePeatonal)) return false;
+  if (segmentos.some(esSegmentoFootway)) return false;
+
+  const nombres = new Set(
+    segmentos
+      .map((segmento) => normalizarNombreVia(segmento.nombre))
+      .filter(Boolean)
+  );
+
+  return nombres.size === 1;
+};
+
+/*
+ * Reconstruye el sentido de recorrido usando los nodos de cada arista.
+ * Las coordenadas quedan ordenadas segÃºn el recorrido, aunque la arista
+ * original de OSM estÃ© almacenada en sentido contrario.
+ */
+const obtenerRecorridosOrientados = (segmentos) => {
+  if (!Array.isArray(segmentos) || !segmentos.length) return [];
+
+  const primero = segmentos[0];
+  const posiblesInicios = [
+    primero.nodo_origen,
+    primero.nodo_destino,
+  ].filter((nodo) => nodo != null);
+
+  const recorridos = [];
+  const firmas = new Set();
+
+  for (const posibleInicio of posiblesInicios) {
+    let nodoActual = String(posibleInicio);
+    const nodos = [nodoActual];
+    const puntos = [];
+    const indices = [];
+    let valido = true;
+
+    for (let indice = 0; indice < segmentos.length; indice++) {
+      const segmento = segmentos[indice];
+
+      if (
+        segmento.nodo_origen == null ||
+        segmento.nodo_destino == null ||
+        !Array.isArray(segmento.inicio) ||
+        !Array.isArray(segmento.fin)
+      ) {
+        valido = false;
+        break;
+      }
+
+      const origen = String(segmento.nodo_origen);
+      const destino = String(segmento.nodo_destino);
+
+      let siguiente;
+      let puntoInicio;
+      let puntoFin;
+
+      if (origen === nodoActual) {
+        siguiente = destino;
+        puntoInicio = segmento.inicio;
+        puntoFin = segmento.fin;
+      } else if (destino === nodoActual) {
+        siguiente = origen;
+        puntoInicio = segmento.fin;
+        puntoFin = segmento.inicio;
+      } else {
+        valido = false;
+        break;
+      }
+
+      const coordenadasValidas = [puntoInicio, puntoFin].every(
+        (punto) =>
+          Number.isFinite(Number(punto[0])) &&
+          Number.isFinite(Number(punto[1]))
+      );
+
+      if (!coordenadasValidas) {
+        valido = false;
+        break;
+      }
+
+      if (indice === 0) {
+        puntos.push(puntoInicio);
+      }
+
+      puntos.push(puntoFin);
+      nodos.push(siguiente);
+      indices.push(indice);
+      nodoActual = siguiente;
+    }
+
+    if (!valido) continue;
+
+    const firma = nodos.join("->");
+    if (firmas.has(firma)) continue;
+
+    firmas.add(firma);
+    recorridos.push({ nodos, puntos, indices });
+  }
+
+  return recorridos;
+};
+
+const distanciaPuntoSegmentoLocal = (punto, inicio, fin) => {
+  const dx = fin[0] - inicio[0];
+  const dy = fin[1] - inicio[1];
+  const longitudCuadrada = dx * dx + dy * dy;
+
+  if (longitudCuadrada === 0) {
+    return Math.hypot(
+      punto[0] - inicio[0],
+      punto[1] - inicio[1]
+    );
+  }
+
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      (
+        (punto[0] - inicio[0]) * dx +
+        (punto[1] - inicio[1]) * dy
+      ) / longitudCuadrada
+    )
+  );
+
+  const proyeccionX = inicio[0] + t * dx;
+  const proyeccionY = inicio[1] + t * dy;
+
+  return Math.hypot(
+    punto[0] - proyeccionX,
+    punto[1] - proyeccionY
+  );
+};
+
+const distanciaPuntoPolilineaLocal = (punto, polilinea) => {
+  let minima = Infinity;
+
+  for (let indice = 0; indice < polilinea.length - 1; indice++) {
+    minima = Math.min(
+      minima,
+      distanciaPuntoSegmentoLocal(
+        punto,
+        polilinea[indice],
+        polilinea[indice + 1]
+      )
+    );
+  }
+
+  return minima;
+};
+
+/* Genera muestras cada 5 metros para comparar la geometrÃ­a completa. */
+const muestrearPolilineaLocal = (polilinea) => {
+  const muestras = [];
+
+  for (let indice = 0; indice < polilinea.length - 1; indice++) {
+    const inicio = polilinea[indice];
+    const fin = polilinea[indice + 1];
+
+    const longitud = Math.hypot(
+      fin[0] - inicio[0],
+      fin[1] - inicio[1]
+    );
+
+    const pasos = Math.max(1, Math.ceil(longitud / 5));
+
+    for (let paso = 0; paso < pasos; paso++) {
+      const t = paso / pasos;
+
+      muestras.push([
+        inicio[0] + (fin[0] - inicio[0]) * t,
+        inicio[1] + (fin[1] - inicio[1]) * t,
+      ]);
+    }
+  }
+
+  muestras.push(polilinea[polilinea.length - 1]);
+  return muestras;
+};
+
+/*
+ * Mide la separaciÃ³n mÃ¡xima aproximada entre dos polilÃ­neas.
+ * Se revisan ambas direcciones para evitar que una ruta se aleje
+ * considerablemente aunque la otra permanezca cerca.
+ */
+const medirSeparacionMaximaPolilineas = (puntosA, puntosB) => {
+  if (puntosA.length < 2 || puntosB.length < 2) return Infinity;
+
+  const referencia = puntosA[0];
+
+  const polilineaA = puntosA.map((punto) =>
+    proyectarPuntoLocal(punto, referencia)
+  );
+
+  const polilineaB = puntosB.map((punto) =>
+    proyectarPuntoLocal(punto, referencia)
+  );
+
+  const muestrasA = muestrearPolilineaLocal(polilineaA);
+  const muestrasB = muestrearPolilineaLocal(polilineaB);
+
+  const maximaA = Math.max(
+    ...muestrasA.map((punto) =>
+      distanciaPuntoPolilineaLocal(punto, polilineaB)
+    )
+  );
+
+  const maximaB = Math.max(
+    ...muestrasB.map((punto) =>
+      distanciaPuntoPolilineaLocal(punto, polilineaA)
+    )
+  );
+
+  return Math.max(maximaA, maximaB);
+};
+
+/*
+ * Detecta subrutas que comparten nodos de inicio y fin, aunque una
+ * estÃ© representada por una sola arista y la otra por varias.
+ *
+ * En esta primera versiÃ³n, la equivalencia entre tipos distintos
+ * se limita al caso footway frente a calle nombrada.
+ */
+const obtenerCoincidenciasSubrutas = (segmentosA, segmentosB) => {
+  const recorridosA = obtenerRecorridosOrientados(segmentosA);
+  const recorridosB = obtenerRecorridosOrientados(segmentosB);
+
+  const coincidencias = [];
+  const firmas = new Set();
+
+  for (const recorridoA of recorridosA) {
+    for (const recorridoB of recorridosB) {
+      const nodosB = new Set(recorridoB.nodos);
+      const nodosComunes = new Set(
+        recorridoA.nodos.filter((nodo) => nodosB.has(nodo))
+      );
+
+      for (
+        let inicioA = 0;
+        inicioA < recorridoA.nodos.length - 1;
+        inicioA++
+      ) {
+        const nodoInicio = recorridoA.nodos[inicioA];
+
+        if (!nodosComunes.has(nodoInicio)) continue;
+
+        const inicioB = recorridoB.nodos.indexOf(nodoInicio);
+        if (inicioB < 0) continue;
+
+        for (
+          let finA = inicioA + 1;
+          finA < recorridoA.nodos.length;
+          finA++
+        ) {
+          const nodoFin = recorridoA.nodos[finA];
+
+          if (!nodosComunes.has(nodoFin)) continue;
+
+          const finB = recorridoB.nodos.indexOf(nodoFin);
+          if (finB <= inicioB) continue;
+
+          // Solo evaluamos tramos entre anclajes consecutivos compartidos.
+          const tieneAnclaIntermediaA = recorridoA.nodos
+            .slice(inicioA + 1, finA)
+            .some((nodo) => nodosComunes.has(nodo));
+
+          const tieneAnclaIntermediaB = recorridoB.nodos
+            .slice(inicioB + 1, finB)
+            .some((nodo) => nodosComunes.has(nodo));
+
+          if (tieneAnclaIntermediaA || tieneAnclaIntermediaB) continue;
+
+          const indicesA = recorridoA.indices.slice(inicioA, finA);
+          const indicesB = recorridoB.indices.slice(inicioB, finB);
+
+          const subrutaA = indicesA.map((indice) => segmentosA[indice]);
+          const subrutaB = indicesB.map((indice) => segmentosB[indice]);
+
+          const coincideFootwayYCalle =
+            (esSubrutaFootway(subrutaA) &&
+              esSubrutaCalleNombrada(subrutaB)) ||
+            (esSubrutaCalleNombrada(subrutaA) &&
+              esSubrutaFootway(subrutaB));
+
+          if (!coincideFootwayYCalle) continue;
+
+          const distanciaA = subrutaA.reduce(
+            (total, segmento) =>
+              total + (Number(segmento.distancia_metros) || 0),
+            0
+          );
+
+          const distanciaB = subrutaB.reduce(
+            (total, segmento) =>
+              total + (Number(segmento.distancia_metros) || 0),
+            0
+          );
+
+          if (!(distanciaA > 0) || !(distanciaB > 0)) continue;
+
+          const proporcionLongitudes =
+            Math.min(distanciaA, distanciaB) /
+            Math.max(distanciaA, distanciaB);
+
+          // Evita relacionar recorridos con longitudes demasiado diferentes.
+          if (proporcionLongitudes < 0.80) continue;
+
+          const puntosA = recorridoA.puntos.slice(inicioA, finA + 1);
+          const puntosB = recorridoB.puntos.slice(inicioB, finB + 1);
+
+          const separacion = medirSeparacionMaximaPolilineas(
+            puntosA,
+            puntosB
+          );
+
+          if (separacion > SEPARACION_MAXIMA_VIA_CONTINUA_METROS) {
+            continue;
+          }
+
+          const firma = `${indicesA.join(",")}|${indicesB.join(",")}`;
+          if (firmas.has(firma)) continue;
+
+          firmas.add(firma);
+          coincidencias.push({ indicesA, indicesB });
+        }
+      }
+    }
+  }
+
+  return coincidencias;
+};
+
+/* Suma coincidencias locales con presupuesto por arista para evitar doble conteo. */
+const calcularDistanciaCompartidaCorredor = (rutaA, rutaB) => {
+  const segmentosA = obtenerSegmentosComparables(rutaA);
+  const segmentosB = obtenerSegmentosComparables(rutaB);
+
+  const intervalosPorA = segmentosA.map(() => []);
+  const intervalosPorB = segmentosB.map(() => []);
+
+  // Primero registramos las coincidencias de subrutas completas.
+  const coincidenciasSubrutas = obtenerCoincidenciasSubrutas(
+    segmentosA,
+    segmentosB
+  );
+
+  for (const coincidencia of coincidenciasSubrutas) {
+    for (const indice of coincidencia.indicesA) {
+      const distancia =
+        Number(segmentosA[indice].distancia_metros) || 0;
+
+      if (distancia > 0) {
+        intervalosPorA[indice].push([0, distancia]);
+      }
+    }
+
+    for (const indice of coincidencia.indicesB) {
+      const distancia =
+        Number(segmentosB[indice].distancia_metros) || 0;
+
+      if (distancia > 0) {
+        intervalosPorB[indice].push([0, distancia]);
+      }
+    }
+  }
+
+  // DespuÃ©s conservamos la comparaciÃ³n individual que ya existÃ­a.
+  const cruces = [...segmentosA, ...segmentosB].filter(esCrucePeatonal);
+  const candidatos = [];
+
+  segmentosA.forEach((a, indiceA) =>
+    segmentosB.forEach((b, indiceB) => {
+      const coincidencia = evaluarCoincidenciaCorredor(
+        a,
+        b,
+        cruces,
+        cruces
+      );
+
+      if (coincidencia) {
+        candidatos.push({ indiceA, indiceB, ...coincidencia });
+      }
+    })
+  );
+
+  candidatos.sort(
+    (a, b) =>
+      Number(b.exacta) - Number(a.exacta) ||
+      b.longitud - a.longitud
+  );
+
+  for (const candidato of candidatos) {
+    const distanciaA =
+      Math.max(
+        0,
+        Number(segmentosA[candidato.indiceA].distancia_metros) || 0
+      );
+
+    const distanciaB =
+      Math.max(
+        0,
+        Number(segmentosB[candidato.indiceB].distancia_metros) || 0
+      );
+
+    if (distanciaA <= 0 || distanciaB <= 0) continue;
+
+    intervalosPorA[candidato.indiceA].push([
+      candidato.inicio * distanciaA,
+      candidato.fin * distanciaA,
+    ]);
+
+    intervalosPorB[candidato.indiceB].push([
+      candidato.inicioB * distanciaB,
+      candidato.finB * distanciaB,
+    ]);
+  }
+
+  const medirUnion = (intervalosPorSegmento, segmentos) =>
+    intervalosPorSegmento.reduce((total, intervalos, indice) => {
+      intervalos.sort((a, b) => a[0] - b[0]);
+
+      let inicio = null;
+      let fin = null;
+      let union = 0;
+
+      for (const intervalo of intervalos) {
+        if (inicio == null) {
+          [inicio, fin] = intervalo;
+          continue;
+        }
+
+        if (intervalo[0] <= fin) {
+          fin = Math.max(fin, intervalo[1]);
+        } else {
+          union += fin - inicio;
+          [inicio, fin] = intervalo;
+        }
+      }
+
+      if (inicio != null) union += fin - inicio;
+
+      return total + Math.min(
+        union,
+        Number(segmentos[indice].distancia_metros) || 0
+      );
+    }, 0);
+
+  return Math.min(
+    medirUnion(intervalosPorA, segmentosA),
+    medirUnion(intervalosPorB, segmentosB)
+  );
+};
+
+const calcularSimilitudCorredor = (rutaA, rutaB) => {
+  const segmentosA = obtenerSegmentosComparables(rutaA);
+  const segmentosB = obtenerSegmentosComparables(rutaB);
+
+  const distanciaA = segmentosA.reduce(
+    (total, segmento) =>
+      total + Math.max(
+        0,
+        Number(segmento.distancia_metros) || 0
+      ),
+    0
+  );
+
+  const distanciaB = segmentosB.reduce(
+    (total, segmento) =>
+      total + Math.max(
+        0,
+        Number(segmento.distancia_metros) || 0
+      ),
+    0
+  );
+
+  if (!(distanciaA > 0) || !(distanciaB > 0)) {
+    return 0;
+  }
+
+  const distanciaCompartida =
+    calcularDistanciaCompartidaCorredor(rutaA, rutaB);
+
+  return Math.min(
+    1,
+    distanciaCompartida / Math.max(distanciaA, distanciaB)
+  );
+};
+
+/*
+ * Determina si dos alternativas son redundantes.
+ */
+const sonSegmentosIdenticos = (rutaA, rutaB) => {
+  const idsA = rutaA[IDS_SEGMENTOS_RUTA];
+  const idsB = rutaB[IDS_SEGMENTOS_RUTA];
+  if (Array.isArray(idsA) && Array.isArray(idsB)) {
+    return idsA.length === idsB.length && idsA.every((id, index) => id === idsB[index]);
+  }
+
+  const nodosA = Array.isArray(rutaA.nodos_ruta)
+    ? rutaA.nodos_ruta.join("->")
+    : "";
+
+  const nodosB = Array.isArray(rutaB.nodos_ruta)
+    ? rutaB.nodos_ruta.join("->")
+    : "";
+
+  return Boolean(nodosA && nodosA === nodosB);
+};
+
+/*
+ * Determina si una ruta es dominada por otra considerando
+ * distancia y riesgo.
+ *
+ * Una ruta estÃ¡ dominada cuando la otra es igual o mejor
+ * en ambos indicadores y estrictamente mejor en al menos uno.
+ */
+const esRutaDominadaPor = (ruta, rutaComparadora) => {
+  if (
+    !ruta ||
+    !rutaComparadora ||
+    ruta.distancia_metros == null ||
+    ruta.puntaje_riesgo == null ||
+    rutaComparadora.distancia_metros == null ||
+    rutaComparadora.puntaje_riesgo == null
+  ) {
+    return false;
+  }
+
+  const distancia = Number(ruta.distancia_metros);
+  const riesgo = Number(ruta.puntaje_riesgo);
+
+  const distanciaComparadora = Number(
+    rutaComparadora.distancia_metros
+  );
+
+  const riesgoComparadora = Number(
+    rutaComparadora.puntaje_riesgo
+  );
+
+  if (
+    !Number.isFinite(distancia) ||
+    !Number.isFinite(riesgo) ||
+    !Number.isFinite(distanciaComparadora) ||
+    !Number.isFinite(riesgoComparadora) ||
+    distancia <= 0 ||
+    distanciaComparadora <= 0
+  ) {
+    return false;
+  }
+
+  const noEsPeorEnDistancia =
+    distanciaComparadora <= distancia;
+
+  const noEsPeorEnRiesgo =
+    riesgoComparadora <= riesgo;
+
+  const esMejorEnAlgunIndicador =
+    distanciaComparadora < distancia ||
+    riesgoComparadora < riesgo;
+
+  return (
+    noEsPeorEnDistancia &&
+    noEsPeorEnRiesgo &&
+    esMejorEnAlgunIndicador
+  );
+};
+
+const sonRutasEquivalentes = (rutaA, rutaB) => {
+  if (sonSegmentosIdenticos(rutaA, rutaB)) return true;
+
+  // Caso 2: utilizan prÃ¡cticamente los mismos corredores.
+  const similitud = calcularSimilitudCorredor(
+    rutaA,
+    rutaB
+  );
+
+  if (similitud < UMBRAL_SIMILITUD_CORREDOR) {
+    return false;
+  }
+
+  // No descartar una posible alternativa mÃ¡s segura
+  // cuando la diferencia de riesgo sea relevante.
+  const riesgoA =
+    rutaA.puntaje_riesgo == null
+      ? NaN
+      : Number(rutaA.puntaje_riesgo);
+
+  const riesgoB =
+    rutaB.puntaje_riesgo == null
+      ? NaN
+      : Number(rutaB.puntaje_riesgo);
+
+  if (
+    Number.isFinite(riesgoA) &&
+    Number.isFinite(riesgoB) &&
+    Math.abs(riesgoA - riesgoB) >=
+      DIFERENCIA_RIESGO_RELEVANTE
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+/*
+ * Genera las alternativas de navegaciÃ³n:
+ * 1. Menor riesgo.
+ * 2. Equilibrada.
+ * 3. MÃ¡s rÃ¡pida.
+ *
+ * El grafo se obtiene una sola vez y se reutiliza
+ * para ejecutar Dijkstra con cada perfil.
+ *
+ * Los recorridos duplicados se eliminan.
+ * Si no hay tres recorridos diferentes, se devuelven
+ * Ãºnicamente las alternativas disponibles.
+ */
+
+const calcularRutasAlternativas = async ({
+  comuna,
+  origen,
+  destino,
+  rangoHorario,
+}) => {
+  const {
+    latOrigen,
+    lonOrigen,
+    latDestino,
+    lonDestino,
+  } = normalizarCoordenadasRuta({
+    origen,
+    destino,
+  });
+
+  const origenNormalizado = {
+    latitud: latOrigen,
+    longitud: lonOrigen,
+  };
+
+  const destinoNormalizado = {
+    latitud: latDestino,
+    longitud: lonDestino,
+  };
+
+const grafoOriginal = validarGrafoPeatonal(
+  await obtenerGrafoRuta({
+    comuna,
+    origen: origenNormalizado,
+    destino: destinoNormalizado,
+    rangoHorario,
+  })
+);
+
+const {
+  grafo,
+  origen: conexionOrigen,
+  destino: conexionDestino,
+} = prepararGrafoConProyeccionesRuta(
+  grafoOriginal,
+  latOrigen,
+  lonOrigen,
+  latDestino,
+  lonDestino
+);
+
+console.log(
+  `RUTA - ProyecciÃ³n origen: ${conexionOrigen.distancia_metros} m`
+);
+
+console.log(
+  `RUTA - ProyecciÃ³n destino: ${conexionDestino.distancia_metros} m`
+);
+
+  const rutasUnicas = [];
+  const perfilesPendientes = [];
+
+  const cantidadPerfiles = Object.keys(PERFILES_RUTA).length;
+
+  // Registra los segmentos que ya forman parte de corredores utilizados.
+  // Se usa una marca binaria para no penalizar varias veces los tramos
+  // compartidos por diferentes rutas.
+  const registrarSegmentosPenalizados = (usos, ruta) => {
+    const ids = ruta?.[IDS_SEGMENTOS_RUTA];
+
+    if (!Array.isArray(ids)) return;
+
+    for (const id of ids) {
+      usos.set(id, 1);
+    }
+  };
+
+  const obtenerMotivoRedundancia = (resultado) => {
+    const duplicadaExacta = rutasUnicas.some((ruta) =>
+      sonSegmentosIdenticos(ruta, resultado)
+    );
+
+    if (duplicadaExacta) {
+      return "secuencia de segmentos idÃ©ntica";
+    }
+
+    const similar = rutasUnicas.some((ruta) =>
+      sonRutasEquivalentes(ruta, resultado)
+    );
+
+    if (similar) {
+      return "similitud de corredores >= 90%";
+    }
+
+    return null;
+  };
+
+  const resultadoValido = (resultado) =>
+    resultado?.encontrada &&
+    Array.isArray(resultado.nodos_ruta);
+
+  // ETAPA 1: calcular los perfiles originales sin penalizaciÃ³n.
+  for (const perfilRuta of Object.keys(PERFILES_RUTA)) {
+    const resultado = await calcularRutaSegura({
+      comuna,
+      origen: origenNormalizado,
+      destino: destinoNormalizado,
+      rangoHorario,
+      perfilRuta,
+      factorPenalizacion: 0,
+      usosSegmento: new Map(),
+      grafoPrecalculado: grafo,
+      conexionesProyectadas: {
+        origen: conexionOrigen,
+        destino: conexionDestino,
+      },
+    });
+
+    if (!resultadoValido(resultado)) {
+      console.log(
+        `RUTA - Alternativa no disponible: ${perfilRuta}`
+      );
+      continue;
+    }
+
+    const motivo = obtenerMotivoRedundancia(resultado);
+
+    if (motivo) {
+      console.log(
+        `RUTA - Alternativa descartada: ${perfilRuta} (${motivo})`
+      );
+
+      // Guardamos el perfil para intentar encontrarle
+      // un recorrido diferente en la segunda etapa.
+      perfilesPendientes.push({
+        perfilRuta,
+        rutaBase: resultado,
+      });
+
+      continue;
+    }
+
+    rutasUnicas.push(resultado);
+  }
+
+  // ETAPA 2: buscar reemplazos para los perfiles descartados.
+  for (const { perfilRuta, rutaBase } of perfilesPendientes) {
+    if (rutasUnicas.length >= cantidadPerfiles) break;
+
+    const usosSegmento = new Map();
+
+    // Penalizamos las rutas que ya fueron aceptadas.
+    for (const ruta of rutasUnicas) {
+      registrarSegmentosPenalizados(usosSegmento, ruta);
+    }
+
+    // TambiÃ©n penalizamos el recorrido Ã³ptimo descartado
+    // para intentar explorar un corredor diferente.
+    registrarSegmentosPenalizados(usosSegmento, rutaBase);
+
+    let recuperada = false;
+
+    for (const factorPenalizacion of FACTORES_PENALIZACION_RECUPERACION) {
+      const resultado = await calcularRutaSegura({
+        comuna,
+        origen: origenNormalizado,
+        destino: destinoNormalizado,
+        rangoHorario,
+        perfilRuta,
+        factorPenalizacion,
+        usosSegmento,
+        grafoPrecalculado: grafo,
+        conexionesProyectadas: {
+          origen: conexionOrigen,
+          destino: conexionDestino,
+        },
+      });
+
+      if (!resultadoValido(resultado)) {
+        console.log(
+          `RUTA - Reintento sin recorrido: ${perfilRuta} (factor ${factorPenalizacion})`
+        );
+        continue;
+      }
+
+      const motivo = obtenerMotivoRedundancia(resultado);
+
+      if (!motivo) {
+        // Antes de aceptar el candidato, comprobar si alguna ruta
+        // existente ya es igual o mejor en distancia y riesgo.
+        const rutaDominante = rutasUnicas.find(
+          (rutaExistente) =>
+            esRutaDominadaPor(resultado, rutaExistente)
+        );
+
+        if (rutaDominante) {
+          console.log(
+            `RUTA - Candidato recuperado dominado: ${perfilRuta} ` +
+            `(dominado por ${rutaDominante.perfil_ruta || "otra ruta"}, ` +
+            `factor ${factorPenalizacion})`
+          );
+
+          // Evitamos volver a encontrar el mismo recorrido
+          // en el siguiente intento.
+          registrarSegmentosPenalizados(usosSegmento, resultado);
+
+          // Continuamos con el siguiente factor de penalizaciÃ³n.
+          continue;
+        }
+
+        // El candidato no es redundante ni estÃ¡ dominado.
+        resultado.es_alternativa_diversificada = true;
+
+        rutasUnicas.push(resultado);
+
+        console.log(
+          `RUTA - Alternativa recuperada: ${perfilRuta} (factor ${factorPenalizacion})`
+        );
+
+        recuperada = true;
+        break;
+      }
+
+      console.log(
+        `RUTA - Candidato diversificado descartado: ${perfilRuta} (${motivo}, factor ${factorPenalizacion})`
+      );
+
+      // El siguiente intento tambiÃ©n evitarÃ¡ los segmentos
+      // utilizados por este candidato redundante.
+      registrarSegmentosPenalizados(usosSegmento, resultado);
+    }
+
+    if (!recuperada) {
+      console.log(
+        `RUTA - No se encontrÃ³ reemplazo diferente para: ${perfilRuta}`
+      );
+    }
+  }
+
+// ETAPA 3: eliminar rutas dominadas por otra alternativa.
+// Se conservan las rutas que ofrecen una ventaja en distancia
+// o en riesgo frente a las demÃ¡s.
+const rutasNoDominadas = rutasUnicas.filter((ruta, indice) => {
+  const rutaDominante = rutasUnicas.find(
+    (otraRuta, otroIndice) =>
+      otroIndice !== indice &&
+      esRutaDominadaPor(ruta, otraRuta)
+  );
+
+  if (rutaDominante) {
+    console.log(
+      `RUTA - Alternativa dominada descartada: ${ruta.perfil_ruta}`
+    );
+  }
+
+  return !rutaDominante;
+});
+
+  let mensaje = null;
+
+if (rutasNoDominadas.length === 0) {
+  mensaje =
+    "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.";
+} else if (rutasNoDominadas.length < cantidadPerfiles) {
+  mensaje =
+    `Solo fue posible generar ${rutasNoDominadas.length} rutas peatonales diferentes de ${cantidadPerfiles} posibles.`;
+}
+
+console.log(
+  `RUTA - Alternativas diferentes: ${rutasNoDominadas.length}/${cantidadPerfiles}`
+);
+
+return {
+  encontrada: rutasNoDominadas.length > 0,
+  cantidad_rutas: rutasNoDominadas.length,
+  rutas: rutasNoDominadas,
+  ...(mensaje ? { mensaje } : {}),
+};
+};
+
+
+module.exports = {
+  calcularRutaSegura,
+  calcularRutasAlternativas,
+  construirBboxRuta,
+  calcularSimilitudCorredor,
+  calcularDistanciaCompartidaCorredor,
+  esRutaDominadaPor,
+  proyectarPuntoSobreSegmento,
+};
+
+========== src/services/grafo-peatonal.service.js ==========
+
+const {
+  obtenerRedPeatonalConRiesgo,
+} = require("./riesgo-red.service");
+const {
+  calcularCostoOperativoArista,
+  PESO_DISTANCIA,
+  PESO_RIESGO,
+} = require("./costo-ruta.service");
+
+/**
+ * Normaliza la geometrÃ­a de una vÃ­a a:
+ *
+ * [
+ *   {
+ *     nodo_id,
+ *     latitud,
+ *     longitud
+ *   }
+ * ]
+ *
+ * Soporta:
+ *
+ * 1. Formato interno:
+ *    [
+ *      { nodo_id, latitud, longitud },
+ *      ...
+ *    ]
+ *
+ * 2. Coordenadas:
+ *    [
+ *      [latitud, longitud],
+ *      ...
+ *    ]
+ *
+ * 3. GeoJSON LineString:
+ *    {
+ *      type: "LineString",
+ *      coordinates: [
+ *        [longitud, latitud],
+ *        ...
+ *      ]
+ *    }
+ *
+ * 4. GeoJSON MultiLineString.
+ */
+const normalizarGeometria = (geometria, idVia) => {
+  if (!geometria) {
+    return [];
+  }
+
+  /*
+   * Caso 1:
+   * geometrÃ­a ya viene como arreglo de objetos
+   */
+  if (
+    Array.isArray(geometria) &&
+    geometria.length > 0 &&
+    typeof geometria[0] === "object" &&
+    !Array.isArray(geometria[0])
+  ) {
+    return geometria
+      .map((punto, indice) => {
+        const latitud = Number(
+          punto.latitud ??
+            punto.lat ??
+            punto.latitude
+        );
+
+        const longitud = Number(
+          punto.longitud ??
+            punto.lon ??
+            punto.lng ??
+            punto.longitude
+        );
+
+        if (
+          !Number.isFinite(latitud) ||
+          !Number.isFinite(longitud)
+        ) {
+          return null;
+        }
+
+        /*
+         * Si ya existe nodo_id lo conservamos.
+         *
+         * Si no existe, generamos un identificador
+         * determinÃ­stico usando la vÃ­a y coordenadas.
+         */
+        const nodoId =
+          punto.nodo_id ??
+          punto.id ??
+          `coord:${latitud.toFixed(7)}:${longitud.toFixed(7)}`;
+
+        return {
+          nodo_id: String(nodoId),
+          latitud,
+          longitud,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  /*
+   * Caso 2:
+   * coordenadas simples:
+   *
+   * [
+   *   [lat, lon],
+   *   [lat, lon]
+   * ]
+   */
+  if (
+    Array.isArray(geometria) &&
+    geometria.length > 0 &&
+    Array.isArray(geometria[0])
+  ) {
+    return geometria
+      .map((punto) => {
+        if (punto.length < 2) {
+          return null;
+        }
+
+        const latitud = Number(punto[0]);
+        const longitud = Number(punto[1]);
+
+        if (
+          !Number.isFinite(latitud) ||
+          !Number.isFinite(longitud)
+        ) {
+          return null;
+        }
+
+        return {
+          nodo_id: `coord:${latitud.toFixed(7)}:${longitud.toFixed(7)}`,
+          latitud,
+          longitud,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  /*
+   * Caso 3:
+   * GeoJSON LineString
+   */
+  if (
+    geometria.type === "LineString" &&
+    Array.isArray(geometria.coordinates)
+  ) {
+    return geometria.coordinates
+      .map((punto) => {
+        if (!Array.isArray(punto) || punto.length < 2) {
+          return null;
+        }
+
+        const longitud = Number(punto[0]);
+        const latitud = Number(punto[1]);
+
+        if (
+          !Number.isFinite(latitud) ||
+          !Number.isFinite(longitud)
+        ) {
+          return null;
+        }
+
+        return {
+          nodo_id: `coord:${latitud.toFixed(7)}:${longitud.toFixed(7)}`,
+          latitud,
+          longitud,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  /*
+   * Caso 4:
+   * GeoJSON MultiLineString
+   *
+   * Se unen todas las lÃ­neas en una sola secuencia.
+   */
+  if (
+    geometria.type === "MultiLineString" &&
+    Array.isArray(geometria.coordinates)
+  ) {
+    const puntos = [];
+
+    for (
+      const linea of geometria.coordinates
+    ) {
+      if (!Array.isArray(linea)) {
+        continue;
+      }
+
+      for (const punto of linea) {
+        if (
+          !Array.isArray(punto) ||
+          punto.length < 2
+        ) {
+          continue;
+        }
+
+        const longitud = Number(punto[0]);
+        const latitud = Number(punto[1]);
+
+        if (
+          !Number.isFinite(latitud) ||
+          !Number.isFinite(longitud)
+        ) {
+          continue;
+        }
+
+        puntos.push({
+          nodo_id: `coord:${latitud.toFixed(7)}:${longitud.toFixed(7)}`,
+          latitud,
+          longitud,
+        });
+      }
+    }
+
+    return puntos;
+  }
+
+  /*
+   * Caso 5:
+   * objeto que contiene coordinates.
+   */
+  if (Array.isArray(geometria.coordinates)) {
+    return normalizarGeometria(
+      {
+        type: "LineString",
+        coordinates: geometria.coordinates,
+      },
+      idVia
+    );
+  }
+
+  return [];
+};
+
+const obtenerGrafoPeatonal = async ({
+  comuna,
+  highway,
+  rangoHorario,
+  bbox,
+  soloSupabase = false,
+} = {}) => {
+  const vias =
+    await obtenerRedPeatonalConRiesgo({
+      comuna,
+      rangoHorario,
+      bbox,
+      soloSupabase,
+    });
+
+  const nodosMap = new Map();
+  const aristas = [];
+
+  for (const via of vias) {
+    const geometria =
+      normalizarGeometria(
+        via.geometria,
+        via.id_osm
+      );
+
+    if (
+      geometria.length < 2
+    ) {
+      continue;
+    }
+
+    /*
+     * Riesgo normalizado entre 0 y 1.
+     */
+    const riesgoNormalizado =
+      Math.min(
+        Math.max(
+          Number(
+            via.puntaje_riesgo ?? 0
+          ) / 100,
+          0
+        ),
+        1
+      );
+
+    if (!Number.isFinite(riesgoNormalizado)) {
+      continue;
+    }
+
+    /*
+     * Registrar nodos.
+     */
+    for (const nodo of geometria) {
+      if (!nodo.nodo_id) {
+        continue;
+      }
+
+      if (
+        !nodosMap.has(
+          nodo.nodo_id
+        )
+      ) {
+        nodosMap.set(
+          nodo.nodo_id,
+          {
+            id: nodo.nodo_id,
+
+            latitud:
+              nodo.latitud,
+
+            longitud:
+              nodo.longitud,
+
+            conexiones:
+              new Set(),
+          }
+        );
+      }
+    }
+
+    /*
+     * Cada tramo entre dos nodos
+     * se convierte en una arista.
+     */
+    for (
+      let i = 0;
+      i < geometria.length - 1;
+      i++
+    ) {
+      const nodoOrigen =
+        geometria[i];
+
+      const nodoDestino =
+        geometria[i + 1];
+
+      if (
+        !nodoOrigen?.nodo_id ||
+        !nodoDestino?.nodo_id
+      ) {
+        continue;
+      }
+
+      const distancia =
+        distanciaEntreNodos(
+          nodoOrigen,
+          nodoDestino
+        );
+
+      if (
+        !Number.isFinite(distancia) ||
+        distancia <= 0
+      ) {
+        continue;
+      }
+
+      const costoArista =
+        calcularCostoOperativoArista(
+          distancia,
+          riesgoNormalizado,
+          PESO_DISTANCIA,
+          PESO_RIESGO
+        );
+
+      const arista = {
+        id: `${via.id_osm}-${i}`,
+
+        id_osm:
+          via.id_osm,
+
+        nodo_origen:
+          nodoOrigen.nodo_id,
+
+        nodo_destino:
+          nodoDestino.nodo_id,
+
+        distancia_metros:
+          distancia,
+
+        puntaje_riesgo:
+          Number(
+            via.puntaje_riesgo ?? 0
+          ),
+
+        nivel_riesgo:
+          via.nivel_riesgo ??
+          "Bajo",
+
+        costo_riesgo:
+          Number(
+            (
+              distancia *
+              riesgoNormalizado
+            ).toFixed(4)
+          ),
+
+        costo_distancia:
+          Number(
+            (
+              distancia *
+              0.3
+            ).toFixed(4)
+          ),
+
+        costo_arista:
+          Number(
+            costoArista.toFixed(4)
+          ),
+
+        zonas_intersectadas:
+          Array.isArray(
+            via.zonas_intersectadas
+          )
+            ? via.zonas_intersectadas
+            : [],
+
+        nombre:
+          via.nombre,
+
+        comuna:
+          via.comuna,
+
+        tipo:
+          via.tipo,
+
+        categoria_peatonal:
+          via.categoria_peatonal,
+
+        superficie:
+          via.superficie,
+
+        acceso_peatonal:
+          via.acceso_peatonal,
+
+        sidewalk:
+          via.sidewalk,
+
+        footway:
+          via.footway,
+
+        crossing:
+          via.crossing,
+
+        smoothness:
+          via.smoothness,
+
+        incline:
+          via.incline,
+
+        wheelchair:
+          via.wheelchair,
+
+        width:
+          via.width,
+
+        step_count:
+          via.step_count,
+      };
+
+      aristas.push(arista);
+
+      /*
+       * ConexiÃ³n bidireccional.
+       */
+      const origen =
+        nodosMap.get(
+          nodoOrigen.nodo_id
+        );
+
+      const destino =
+        nodosMap.get(
+          nodoDestino.nodo_id
+        );
+
+      if (origen && destino) {
+        origen.conexiones.add(
+          nodoDestino.nodo_id
+        );
+
+        destino.conexiones.add(
+          nodoOrigen.nodo_id
+        );
+      }
+    }
+  }
+
+  /*
+   * Convertimos Set -> Array.
+   */
+  const nodos = Array.from(
+    nodosMap.values()
+  ).map((nodo) => ({
+    ...nodo,
+
+    conexiones:
+      Array.from(
+        nodo.conexiones
+      ),
+  }));
+
+  /*
+   * DiagnÃ³stico.
+   */
+  console.log(
+    `GRAFO - VÃ­as recibidas: ${vias.length}, nodos: ${nodos.length}, aristas: ${aristas.length}`
+  );
+
+  /*
+   * DiagnÃ³stico adicional.
+   */
+  if (
+    vias.length > 0 &&
+    nodos.length === 0
+  ) {
+    console.warn(
+      "GRAFO - No se pudieron construir nodos. Revisar formato de geometria."
+    );
+
+    console.warn(
+      "GRAFO - Ejemplo de geometria recibida:",
+      JSON.stringify(
+        vias[0]?.geometria
+      ).slice(0, 1000)
+    );
+  }
+
+  const conectividad =
+    analizarConectividad(
+      nodos
+    );
+
+  return {
+    nodos,
+    aristas,
+
+    conectividad,
+
+    resumen: {
+      cantidad_nodos:
+        nodos.length,
+
+      cantidad_aristas:
+        aristas.length,
+
+      cantidad_vias:
+        vias.length,
+
+      componentes_conectados:
+        conectividad.cantidad_componentes,
+
+      nodo_mas_conectado:
+        conectividad.nodo_mas_conectado,
+    },
+  };
+};
+
+/*
+ * Busca el nodo mÃ¡s cercano.
+ */
+const obtenerNodoMasCercano = (
+  nodos,
+  latitud,
+  longitud
+) => {
+  if (
+    !Array.isArray(nodos) ||
+    nodos.length === 0
+  ) {
+    return null;
+  }
+
+  let nodoMasCercano = null;
+
+  let distanciaMinima =
+    Infinity;
+
+  const punto = {
+    latitud:
+      Number(latitud),
+
+    longitud:
+      Number(longitud),
+  };
+
+  for (
+    const nodo of nodos
+  ) {
+    const distancia =
+      distanciaEntreNodos(
+        punto,
+        nodo
+      );
+
+    if (
+      distancia <
+      distanciaMinima
+    ) {
+      distanciaMinima =
+        distancia;
+
+      nodoMasCercano =
+        nodo;
+    }
+  }
+
+  if (!nodoMasCercano) {
+    return null;
+  }
+
+  return {
+    ...nodoMasCercano,
+
+    distancia_metros:
+      distanciaMinima,
+  };
+};
+
+/*
+ * Analiza componentes conectados.
+ */
+const analizarConectividad = (
+  nodos
+) => {
+  const nodosMap =
+    new Map(
+      nodos.map(
+        (nodo) => [
+          nodo.id,
+          nodo,
+        ]
+      )
+    );
+
+  const visitados =
+    new Set();
+
+  const componentes = [];
+
+  for (
+    const nodo of nodos
+  ) {
+    if (
+      visitados.has(
+        nodo.id
+      )
+    ) {
+      continue;
+    }
+
+    const componente = [];
+
+    const cola = [
+      nodo.id,
+    ];
+
+    visitados.add(
+      nodo.id
+    );
+
+    while (
+      cola.length > 0
+    ) {
+      const actualId =
+        cola.shift();
+
+      componente.push(
+        actualId
+      );
+
+      const actual =
+        nodosMap.get(
+          actualId
+        );
+
+      if (!actual) {
+        continue;
+      }
+
+      for (
+        const conexion of
+          actual.conexiones
+      ) {
+        if (
+          !visitados.has(
+            conexion
+          )
+        ) {
+          visitados.add(
+            conexion
+          );
+
+          cola.push(
+            conexion
+          );
+        }
+      }
+    }
+
+    componentes.push(
+      componente
+    );
+  }
+
+  let nodoMasConectado =
+    null;
+
+  let cantidadConexionesMaxima =
+    -1;
+
+  for (
+    const nodo of nodos
+  ) {
+    if (
+      nodo.conexiones.length >
+      cantidadConexionesMaxima
+    ) {
+      cantidadConexionesMaxima =
+        nodo.conexiones.length;
+
+      nodoMasConectado = {
+        id: nodo.id,
+
+        latitud:
+          nodo.latitud,
+
+        longitud:
+          nodo.longitud,
+
+        cantidad_conexiones:
+          nodo.conexiones.length,
+      };
+    }
+  }
+
+  return {
+    cantidad_componentes:
+      componentes.length,
+
+    componentes:
+      componentes.map(
+        (
+          componente,
+          indice
+        ) => ({
+          id:
+            indice + 1,
+
+          cantidad_nodos:
+            componente.length,
+        })
+      ),
+
+    nodo_mas_conectado:
+      nodoMasConectado,
+  };
+};
+
+/*
+ * Distancia Haversine.
+ */
+const distanciaEntreNodos = (
+  nodoA,
+  nodoB
+) => {
+  const radioTierra =
+    6371000;
+
+  const latitudA =
+    Number(
+      nodoA.latitud
+    );
+
+  const latitudB =
+    Number(
+      nodoB.latitud
+    );
+
+  const longitudA =
+    Number(
+      nodoA.longitud
+    );
+
+  const longitudB =
+    Number(
+      nodoB.longitud
+    );
+
+  if (
+    !Number.isFinite(latitudA) ||
+    !Number.isFinite(latitudB) ||
+    !Number.isFinite(longitudA) ||
+    !Number.isFinite(longitudB)
+  ) {
+    return 0;
+  }
+
+  const lat1 =
+    (latitudA *
+      Math.PI) /
+    180;
+
+  const lat2 =
+    (latitudB *
+      Math.PI) /
+    180;
+
+  const diferenciaLatitud =
+    ((latitudB -
+      latitudA) *
+      Math.PI) /
+    180;
+
+  const diferenciaLongitud =
+    ((longitudB -
+      longitudA) *
+      Math.PI) /
+    180;
+
+  const a =
+    Math.sin(
+      diferenciaLatitud / 2
+    ) **
+      2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(
+        diferenciaLongitud / 2
+      ) **
+        2;
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a)
+    );
+
+  return Number(
+    (
+      radioTierra * c
+    ).toFixed(2)
+  );
+};
+
+module.exports = {
+  obtenerGrafoPeatonal,
+  obtenerNodoMasCercano,
+  normalizarGeometria,
+};
+
+========== src/services/red-peatonal.service.js ==========
+
+const {
+  HIGHWAY_VALIDOS,
+  HIGHWAY_EXCLUIDOS,
+  HIGHWAY_EXCLUSIVOS_PEATONALES,
+  HIGHWAY_COMPARTIDOS,
+  HIGHWAY_ACCESO_PEATONAL_EXPLICITO,
+  FOOT_PERMITIDOS,
+} = require("../config/red-peatonal.config");
+
+const supabase = require("../config/supabase");
+
+const OVERPASS_URL =
+  "https://overpass-api.de/api/interpreter";
+
+const GRUPOS_HIGHWAYS = [
+  [
+    "footway",
+    "pedestrian",
+    "path",
+    "steps",
+  ],
+  [
+    "cycleway",
+    "track",
+    "living_street",
+    "residential",
+  ],
+  [
+    "unclassified",
+    "service",
+    "tertiary",
+  ],
+  [
+    "secondary",
+    "primary",
+  ],
+];
+
+const DELAY_ENTRE_CONSULTAS_MS = 1200;
+
+const OVERPASS_TIMEOUT_SEGUNDOS = 60;
+
+const MAX_REINTENTOS = 2;
+
+const CACHE_TTL_MS =
+  24 * 60 * 60 * 1000;
+
+const SUPABASE_PAGE_SIZE = 1000;
+
+const SUPABASE_INSERT_CHUNK_SIZE = 500;
+
+/*
+ * ==========================================================
+ * CACHE EN MEMORIA
+ * ==========================================================
+ */
+
+// CachÃ© compartida por solicitudes atendidas por este proceso Node.js;
+// no coordina ni comparte datos con otras instancias/procesos.
+const cacheRedPeatonal =
+  new Map();
+const cargasEnCurso = new Map();
+
+const esperar = (milisegundos) =>
+  new Promise((resolve) =>
+    setTimeout(resolve, milisegundos)
+  );
+
+/*
+ * ==========================================================
+ * REGLAS PEATONALES
+ * ==========================================================
+ */
+
+const obtenerCategoriaPeatonal = (
+  tipo,
+  tags = {}
+) => {
+  if (
+    HIGHWAY_EXCLUSIVOS_PEATONALES.includes(
+      tipo
+    )
+  ) {
+    return "exclusiva";
+  }
+
+  if (
+    HIGHWAY_COMPARTIDOS.includes(tipo)
+  ) {
+    if (
+      tags.sidewalk &&
+      tags.sidewalk !== "no"
+    ) {
+      return "compartida_con_acera";
+    }
+
+    return "compartida";
+  }
+
+  if (
+    HIGHWAY_ACCESO_PEATONAL_EXPLICITO.includes(
+      tipo
+    ) &&
+    FOOT_PERMITIDOS.includes(tags.foot)
+  ) {
+    return "compartida";
+  }
+
+  return "no_definida";
+};
+
+const esPeatonalmenteUtilizable = (
+  tipo,
+  tags = {}
+) => {
+  if (
+    tags.foot === "no" ||
+    tags.access === "no" ||
+    tags.access === "private"
+  ) {
+    return false;
+  }
+
+  if (
+    HIGHWAY_EXCLUIDOS.includes(tipo)
+  ) {
+    return false;
+  }
+
+  if (
+    HIGHWAY_EXCLUSIVOS_PEATONALES.includes(
+      tipo
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    HIGHWAY_ACCESO_PEATONAL_EXPLICITO.includes(
+      tipo
+    )
+  ) {
+    return FOOT_PERMITIDOS.includes(
+      tags.foot
+    );
+  }
+
+  if (
+    HIGHWAY_COMPARTIDOS.includes(tipo)
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+/*
+ * ==========================================================
+ * DISTANCIAS
+ * ==========================================================
+ */
+
+const calcularDistanciaMetros = (
+  puntoA,
+  puntoB
+) => {
+  const radioTierra = 6371000;
+
+  const lat1 =
+    (Number(puntoA.latitud) *
+      Math.PI) /
+    180;
+
+  const lat2 =
+    (Number(puntoB.latitud) *
+      Math.PI) /
+    180;
+
+  const diferenciaLatitud =
+    ((Number(puntoB.latitud) -
+      Number(puntoA.latitud)) *
+      Math.PI) /
+    180;
+
+  const diferenciaLongitud =
+    ((Number(puntoB.longitud) -
+      Number(puntoA.longitud)) *
+      Math.PI) /
+    180;
+
+  const a =
+    Math.sin(
+      diferenciaLatitud / 2
+    ) **
+      2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(
+        diferenciaLongitud / 2
+      ) **
+        2;
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a)
+    );
+
+  return radioTierra * c;
+};
+
+const calcularLongitudTotal = (
+  geometria
+) => {
+  let distancia = 0;
+
+  for (
+    let i = 0;
+    i < geometria.length - 1;
+    i++
+  ) {
+    distancia +=
+      calcularDistanciaMetros(
+        geometria[i],
+        geometria[i + 1]
+      );
+  }
+
+  return Number(
+    distancia.toFixed(2)
+  );
+};
+
+/*
+ * ==========================================================
+ * CACHE
+ * ==========================================================
+ */
+
+const obtenerClaveCache = (
+  comuna
+) => {
+  return comuna
+    ? comuna.trim().toLowerCase()
+    : "bbox";
+};
+
+const obtenerCacheComuna = (
+  comuna
+) => {
+  const clave =
+    obtenerClaveCache(comuna);
+
+  if (
+    !cacheRedPeatonal.has(
+      clave
+    )
+  ) {
+    cacheRedPeatonal.set(
+      clave,
+      new Map()
+    );
+  }
+
+  return cacheRedPeatonal.get(
+    clave
+  );
+};
+
+const ejecutarUnaCarga = async (clave, cargar) => {
+  if (cargasEnCurso.has(clave)) return cargasEnCurso.get(clave);
+  const carga = Promise.resolve().then(cargar);
+  cargasEnCurso.set(clave, carga);
+  try {
+    return await carga;
+  } finally {
+    if (cargasEnCurso.get(clave) === carga) cargasEnCurso.delete(clave);
+  }
+};
+
+const serializarBbox = (bbox) => bbox
+  ? [bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon].join(",")
+  : "sin-bbox";
+
+const cacheEstaVigente = (
+  entrada
+) => {
+  if (!entrada) {
+    return false;
+  }
+
+  return (
+    Date.now() -
+      entrada.fecha <
+    CACHE_TTL_MS
+  );
+};
+
+/*
+ * ==========================================================
+ * BBOX
+ * ==========================================================
+ */
+
+const normalizarBbox = (
+  bbox
+) => {
+  if (!bbox) {
+    return null;
+  }
+
+  if (typeof bbox === "object") {
+    const minLat = Number(
+      bbox.minLat
+    );
+
+    const minLon = Number(
+      bbox.minLon
+    );
+
+    const maxLat = Number(
+      bbox.maxLat
+    );
+
+    const maxLon = Number(
+      bbox.maxLon
+    );
+
+    if (
+      !Number.isFinite(minLat) ||
+      !Number.isFinite(minLon) ||
+      !Number.isFinite(maxLat) ||
+      !Number.isFinite(maxLon)
+    ) {
+      throw new Error(
+        "BBOX invÃ¡lido. Todos sus valores deben ser numÃ©ricos."
+      );
+    }
+
+    if (
+      minLat >= maxLat ||
+      minLon >= maxLon
+    ) {
+      throw new Error(
+        "BBOX invÃ¡lido. Los mÃ­nimos deben ser menores que los mÃ¡ximos."
+      );
+    }
+
+    return {
+      minLat,
+      minLon,
+      maxLat,
+      maxLon,
+    };
+  }
+
+  const valores =
+    String(bbox)
+      .split(",")
+      .map((valor) =>
+        Number(valor.trim())
+      );
+
+  if (
+    valores.length !== 4
+  ) {
+    throw new Error(
+      "BBOX invÃ¡lido. Formato esperado: minLat,minLon,maxLat,maxLon"
+    );
+  }
+
+  const [
+    minLat,
+    minLon,
+    maxLat,
+    maxLon,
+  ] = valores;
+
+  if (
+    !Number.isFinite(minLat) ||
+    !Number.isFinite(minLon) ||
+    !Number.isFinite(maxLat) ||
+    !Number.isFinite(maxLon)
+  ) {
+    throw new Error(
+      "BBOX invÃ¡lido. Todos sus valores deben ser numÃ©ricos."
+    );
+  }
+
+  if (
+    minLat >= maxLat ||
+    minLon >= maxLon
+  ) {
+    throw new Error(
+      "BBOX invÃ¡lido. Los mÃ­nimos deben ser menores que los mÃ¡ximos."
+    );
+  }
+
+  return {
+    minLat,
+    minLon,
+    maxLat,
+    maxLon,
+  };
+};
+
+const puntoDentroBbox = (
+  punto,
+  bbox
+) => {
+  return (
+    punto.latitud >=
+      bbox.minLat &&
+    punto.latitud <=
+      bbox.maxLat &&
+    punto.longitud >=
+      bbox.minLon &&
+    punto.longitud <=
+      bbox.maxLon
+  );
+};
+
+const segmentoDentroBbox = (
+  segmento,
+  bbox
+) => {
+  if (
+    !Array.isArray(
+      segmento.geometria
+    ) ||
+    !segmento.geometria.length
+  ) {
+    return false;
+  }
+
+  if (
+    segmento.geometria.some(
+      (punto) =>
+        puntoDentroBbox(
+          punto,
+          bbox
+        )
+    )
+  ) {
+    return true;
+  }
+
+  let minLat = Infinity;
+  let minLon = Infinity;
+  let maxLat = -Infinity;
+  let maxLon = -Infinity;
+
+  for (
+    const punto of
+      segmento.geometria
+  ) {
+    const latitud =
+      Number(
+        punto.latitud
+      );
+
+    const longitud =
+      Number(
+        punto.longitud
+      );
+
+    if (
+      !Number.isFinite(latitud) ||
+      !Number.isFinite(longitud)
+    ) {
+      continue;
+    }
+
+    minLat = Math.min(
+      minLat,
+      latitud
+    );
+
+    minLon = Math.min(
+      minLon,
+      longitud
+    );
+
+    maxLat = Math.max(
+      maxLat,
+      latitud
+    );
+
+    maxLon = Math.max(
+      maxLon,
+      longitud
+    );
+  }
+
+  if (
+    minLat === Infinity ||
+    minLon === Infinity
+  ) {
+    return false;
+  }
+
+  return !(
+    maxLat < bbox.minLat ||
+    minLat > bbox.maxLat ||
+    maxLon < bbox.minLon ||
+    minLon > bbox.maxLon
+  );
+};
+
+const filtrarPorBbox = (
+  segmentos,
+  bbox
+) => {
+  if (!bbox) {
+    return segmentos;
+  }
+
+  return segmentos.filter(
+    (segmento) =>
+      segmentoDentroBbox(
+        segmento,
+        bbox
+      )
+  );
+};
+
+/*
+ * ==========================================================
+ * BBOX DE GEOMETRÃA
+ * ==========================================================
+ */
+
+const calcularBboxGeometria = (
+  geometria
+) => {
+  if (
+    !Array.isArray(geometria) ||
+    !geometria.length
+  ) {
+    return null;
+  }
+
+  let minLat = Infinity;
+  let minLon = Infinity;
+  let maxLat = -Infinity;
+  let maxLon = -Infinity;
+
+  for (
+    const punto of geometria
+  ) {
+    const latitud =
+      Number(
+        punto.latitud
+      );
+
+    const longitud =
+      Number(
+        punto.longitud
+      );
+
+    if (
+      !Number.isFinite(latitud) ||
+      !Number.isFinite(longitud)
+    ) {
+      continue;
+    }
+
+    minLat = Math.min(
+      minLat,
+      latitud
+    );
+
+    minLon = Math.min(
+      minLon,
+      longitud
+    );
+
+    maxLat = Math.max(
+      maxLat,
+      latitud
+    );
+
+    maxLon = Math.max(
+      maxLon,
+      longitud
+    );
+  }
+
+  if (
+    !Number.isFinite(minLat) ||
+    !Number.isFinite(minLon) ||
+    !Number.isFinite(maxLat) ||
+    !Number.isFinite(maxLon)
+  ) {
+    return null;
+  }
+
+  return {
+    minLat,
+    minLon,
+    maxLat,
+    maxLon,
+  };
+};
+
+/*
+ * ==========================================================
+ * SUPABASE
+ * ==========================================================
+ */
+
+/*
+ * Convierte un segmento al formato
+ * utilizado por la tabla red_peatonal.
+ */
+const prepararSegmentoParaSupabase = (
+  segmento
+) => {
+  const bbox =
+    calcularBboxGeometria(
+      segmento.geometria
+    );
+
+  if (!bbox) {
+    return null;
+  }
+
+  return {
+    id_osm:
+      String(segmento.id_osm),
+
+    comuna:
+      segmento.comuna || null,
+
+    nombre:
+      segmento.nombre ?? null,
+
+    tipo:
+      segmento.tipo ?? null,
+
+    categoria_peatonal:
+      segmento.categoria_peatonal ??
+      null,
+
+    superficie:
+      segmento.superficie ?? null,
+
+    acceso_peatonal:
+      segmento.acceso_peatonal ??
+      null,
+
+    sidewalk:
+      segmento.sidewalk ?? null,
+
+    footway:
+      segmento.footway ?? null,
+
+    crossing:
+      segmento.crossing ?? null,
+
+    smoothness:
+      segmento.smoothness ?? null,
+
+    incline:
+      segmento.incline ?? null,
+
+    wheelchair:
+      segmento.wheelchair ?? null,
+
+    width:
+      segmento.width ?? null,
+
+    step_count:
+      segmento.step_count ?? null,
+
+    maxspeed:
+      segmento.maxspeed ?? null,
+
+    motorroad:
+      segmento.motorroad ?? null,
+
+    nodo_inicio:
+      segmento.nodo_inicio ?? null,
+
+    nodo_fin:
+      segmento.nodo_fin ?? null,
+
+    geometria:
+      segmento.geometria,
+
+    cantidad_nodos:
+      segmento.cantidad_nodos ??
+      null,
+
+    longitud_metros:
+      segmento.longitud_metros ??
+      null,
+
+    bbox_min_lat:
+      bbox.minLat,
+
+    bbox_min_lon:
+      bbox.minLon,
+
+    bbox_max_lat:
+      bbox.maxLat,
+
+    bbox_max_lon:
+      bbox.maxLon,
+
+    updated_at:
+      new Date().toISOString(),
+  };
+};
+
+/*
+ * Busca todos los segmentos de una comuna
+ * en Supabase utilizando paginaciÃ³n.
+ */
+const obtenerTodosDesdeSupabase = async (
+  comuna
+) => {
+  if (!comuna) {
+    return [];
+  }
+
+  const segmentos = [];
+  let offset = 0;
+
+  while (true) {
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from("red_peatonal")
+        .select("*")
+        .eq("comuna", comuna)
+        .order("id_osm", {
+          ascending: true,
+        })
+        .range(
+          offset,
+          offset +
+            SUPABASE_PAGE_SIZE -
+            1
+        );
+
+    if (error) {
+      throw new Error(
+        `Error consultando Supabase: ${error.message}`
+      );
+    }
+
+    if (
+      !data ||
+      data.length === 0
+    ) {
+      break;
+    }
+
+    segmentos.push(
+      ...data
+    );
+
+    if (
+      data.length <
+      SUPABASE_PAGE_SIZE
+    ) {
+      break;
+    }
+
+    offset +=
+      SUPABASE_PAGE_SIZE;
+  }
+
+  return segmentos.map(
+    convertirSegmentoDesdeSupabase
+  );
+};
+
+/*
+ * Busca solamente los segmentos que
+ * intersectan el BBOX.
+ */
+const obtenerBboxDesdeSupabase = async (
+  comuna,
+  bbox
+) => {
+  if (!bbox) {
+    return [];
+  }
+
+  const segmentos = [];
+  let offset = 0;
+
+  while (true) {
+    let query = supabase
+      .from("red_peatonal")
+      .select("*");
+
+    if (comuna) {
+      query = query.eq("comuna", comuna);
+    }
+
+    const {
+      data,
+      error,
+    } = await query
+      .lte(
+        "bbox_min_lat",
+        bbox.maxLat
+      )
+      .gte(
+        "bbox_max_lat",
+        bbox.minLat
+      )
+      .lte(
+        "bbox_min_lon",
+        bbox.maxLon
+      )
+      .gte(
+        "bbox_max_lon",
+        bbox.minLon
+      )
+      .order("id_osm", {
+        ascending: true,
+      })
+      .range(
+        offset,
+        offset + SUPABASE_PAGE_SIZE - 1
+      );
+
+    if (error) {
+      throw new Error(
+        `Error consultando BBOX en Supabase: ${error.message}`
+      );
+    }
+
+    if (!data || data.length === 0) {
+      break;
+    }
+
+    segmentos.push(...data);
+
+    console.log(
+      `SUPABASE BBOX - ${comuna}: lote ${offset}-${
+        offset + data.length - 1
+      } (${data.length} segmentos)`
+    );
+
+    if (data.length < SUPABASE_PAGE_SIZE) {
+      break;
+    }
+
+    offset += SUPABASE_PAGE_SIZE;
+  }
+
+  return segmentos.map(
+    convertirSegmentoDesdeSupabase
+  );
+};
+
+/*
+ * Convierte una fila de Supabase
+ * al formato que espera el frontend.
+ */
+const convertirSegmentoDesdeSupabase = (
+  segmento
+) => {
+  return {
+    id_osm:
+      segmento.id_osm,
+
+    nombre:
+      segmento.nombre,
+
+    comuna:
+      segmento.comuna,
+
+    tipo:
+      segmento.tipo,
+
+    categoria_peatonal:
+      segmento.categoria_peatonal,
+
+    superficie:
+      segmento.superficie,
+
+    acceso_peatonal:
+      segmento.acceso_peatonal,
+
+    sidewalk:
+      segmento.sidewalk,
+
+    footway:
+      segmento.footway,
+
+    crossing:
+      segmento.crossing,
+
+    smoothness:
+      segmento.smoothness,
+
+    incline:
+      segmento.incline,
+
+    wheelchair:
+      segmento.wheelchair,
+
+    width:
+      segmento.width,
+
+    step_count:
+      segmento.step_count,
+
+    maxspeed:
+      segmento.maxspeed,
+
+    motorroad:
+      segmento.motorroad,
+
+    nodo_inicio:
+      segmento.nodo_inicio,
+
+    nodo_fin:
+      segmento.nodo_fin,
+
+    geometria:
+      Array.isArray(
+        segmento.geometria
+      )
+        ? segmento.geometria
+        : [],
+
+    cantidad_nodos:
+      segmento.cantidad_nodos,
+
+    longitud_metros:
+      Number(
+        segmento.longitud_metros
+      ),
+  };
+};
+
+/*
+ * Determina si Supabase tiene datos
+ * suficientes para la comuna.
+ */
+const obtenerRedDesdeSupabase = async (
+  comuna,
+  bbox,
+  { soloBbox = false } = {}
+) => {
+  if (!comuna && !bbox) {
+    return [];
+  }
+
+  try {
+    if (bbox) {
+      const segmentos =
+        await obtenerBboxDesdeSupabase(
+          comuna,
+          bbox
+        );
+
+      if (
+        segmentos.length > 0
+      ) {
+        console.log(
+          `SUPABASE HIT - ${comuna} - BBOX: ${segmentos.length} segmentos`
+        );
+
+        return {
+          encontrada: true,
+          segmentos,
+        };
+      }
+
+      if (soloBbox) {
+        return {
+          encontrada: true,
+          segmentos: [],
+        };
+      }
+
+      /*
+       * Puede significar que el BBOX
+       * realmente no contiene segmentos.
+       *
+       * Verificamos si la comuna tiene
+       * datos antes de decidir consultar
+       * Overpass.
+       */
+      const todos =
+        await obtenerTodosDesdeSupabase(
+          comuna
+        );
+
+      if (
+        todos.length > 0
+      ) {
+        console.log(
+          `SUPABASE HIT - ${comuna}: BBOX sin segmentos`
+        );
+
+        return {
+          encontrada: true,
+          segmentos:
+            filtrarPorBbox(
+              todos,
+              bbox
+            ),
+        };
+      }
+
+      return {
+        encontrada: false,
+        segmentos: [],
+      };
+    }
+
+    const segmentos =
+      await obtenerTodosDesdeSupabase(
+        comuna
+      );
+
+    if (
+      segmentos.length > 0
+    ) {
+      console.log(
+        `SUPABASE HIT - ${comuna}: ${segmentos.length} segmentos`
+      );
+
+      return {
+        encontrada: true,
+        segmentos,
+      };
+    }
+
+    return {
+      encontrada: false,
+      segmentos: [],
+    };
+  } catch (error) {
+    console.warn(
+      `Advertencia consultando Supabase para ${comuna}:`,
+      error.message
+    );
+
+    return {
+      encontrada: false,
+      segmentos: [],
+      consultaFallida: true,
+    };
+  }
+};
+
+/*
+ * Guarda segmentos en Supabase
+ * por lotes para no enviar un payload
+ * demasiado grande.
+ */
+const guardarEnSupabase = async (
+  segmentos
+) => {
+  if (
+    !Array.isArray(segmentos) ||
+    segmentos.length === 0
+  ) {
+    return;
+  }
+
+  const segmentosPreparados =
+    segmentos
+      .map(
+        prepararSegmentoParaSupabase
+      )
+      .filter(Boolean);
+
+  for (
+    let i = 0;
+    i <
+    segmentosPreparados.length;
+    i +=
+      SUPABASE_INSERT_CHUNK_SIZE
+  ) {
+    const lote =
+      segmentosPreparados.slice(
+        i,
+        i +
+          SUPABASE_INSERT_CHUNK_SIZE
+      );
+
+    const {
+      error,
+    } =
+      await supabase
+        .from("red_peatonal")
+        .upsert(
+          lote,
+          {
+            onConflict:
+              "id_osm,comuna",
+          }
+        );
+
+    if (error) {
+      throw new Error(
+        `Error guardando red peatonal en Supabase: ${error.message}`
+      );
+    }
+
+    console.log(
+      `SUPABASE GUARDADO - ${lote.length} segmentos`
+    );
+  }
+};
+
+/*
+ * ==========================================================
+ * OVERPASS
+ * ==========================================================
+ */
+
+const ejecutarConsultaOverpass = async (
+  consulta,
+  descripcion = ""
+) => {
+  let ultimoError = null;
+
+  for (
+    let intento = 0;
+    intento <= MAX_REINTENTOS;
+    intento++
+  ) {
+    try {
+      const respuesta =
+        await fetch(
+          OVERPASS_URL,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/x-www-form-urlencoded",
+
+              "User-Agent":
+                "RutaSegura/1.0 (proyecto universitario de seguridad peatonal)",
+
+              Accept:
+                "application/json",
+            },
+
+            body:
+              `data=${encodeURIComponent(
+                consulta
+              )}`,
+          }
+        );
+
+      if (respuesta.ok) {
+        return await respuesta.json();
+      }
+
+      const detalle =
+        await respuesta.text();
+
+      console.error(
+        `Respuesta de Overpass HTTP ${respuesta.status}${
+          descripcion
+            ? ` (${descripcion})`
+            : ""
+        }:`
+      );
+
+      console.error(
+        detalle
+      );
+
+      const erroresReintentables = [
+        429,
+        500,
+        502,
+        503,
+        504,
+      ];
+
+      const esReintentable =
+        erroresReintentables.includes(
+          respuesta.status
+        );
+
+      ultimoError =
+        new Error(
+          `Overpass respondiÃ³ con HTTP ${
+            respuesta.status
+          }${
+            descripcion
+              ? ` (${descripcion})`
+              : ""
+          }. ${detalle.slice(
+            0,
+            1500
+          )}`
+        );
+
+      if (
+        !esReintentable ||
+        intento === MAX_REINTENTOS
+      ) {
+        throw ultimoError;
+      }
+
+      const espera =
+        2000 * (intento + 1);
+
+      console.warn(
+        `Reintentando Overpass ${
+          intento + 1
+        }/${MAX_REINTENTOS} en ${
+          espera
+        } ms`
+      );
+
+      await esperar(
+        espera
+      );
+    } catch (error) {
+      if (
+        error?.message?.includes(
+          "Overpass respondiÃ³ con HTTP"
+        )
+      ) {
+        ultimoError = error;
+
+        if (
+          intento ===
+          MAX_REINTENTOS
+        ) {
+          throw error;
+        }
+
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw (
+    ultimoError ||
+    new Error(
+      "No fue posible consultar Overpass."
+    )
+  );
+};
+
+/*
+ * ==========================================================
+ * CONSULTA OVERPASS
+ * ==========================================================
+ */
+
+const construirConsulta = (
+  highways,
+  comuna
+) => {
+  const expresionHighway =
+    highways.join("|");
+
+  if (comuna) {
+    return `
+      [out:json][timeout:${OVERPASS_TIMEOUT_SEGUNDOS}];
+
+      area[
+        "name"="${comuna}"
+      ][
+        "boundary"="administrative"
+      ][
+        "admin_level"="8"
+      ]->.comuna;
+
+      way(area.comuna)
+        ["highway"~"^(${expresionHighway})$"];
+
+      out body geom;
+    `;
+  }
+
+  return `
+    [out:json][timeout:${OVERPASS_TIMEOUT_SEGUNDOS}];
+
+    way(
+      -33.18,
+      -71.70,
+      -32.90,
+      -71.35
+    )["highway"~"^(${expresionHighway})$"];
+
+    out body geom;
+  `;
+};
+
+/*
+ * ==========================================================
+ * TRANSFORMAR SEGMENTOS
+ * ==========================================================
+ */
+
+const transformarSegmentos = (
+  elementos,
+  comuna
+) => {
+  return (
+    elementos || []
+  )
+    .filter(
+      (elemento) =>
+        elemento.type === "way" &&
+        Array.isArray(
+          elemento.geometry
+        ) &&
+        Array.isArray(
+          elemento.nodes
+        ) &&
+        elemento.geometry.length >= 2 &&
+        elemento.nodes.length ===
+          elemento.geometry.length
+    )
+    .filter(
+      (elemento) =>
+        esPeatonalmenteUtilizable(
+          elemento.tags?.highway,
+          elemento.tags || {}
+        )
+    )
+    .map((elemento) => {
+      const tipo =
+        elemento.tags?.highway ??
+        null;
+
+      const tags =
+        elemento.tags || {};
+
+      const geometria =
+        elemento.geometry.map(
+          (punto, indice) => ({
+            nodo_id:
+              String(
+                elemento.nodes[
+                  indice
+                ]
+              ),
+
+            latitud:
+              Number(
+                punto.lat
+              ),
+
+            longitud:
+              Number(
+                punto.lon
+              ),
+          })
+        );
+
+      const nodoInicio =
+        geometria[0];
+
+      const nodoFin =
+        geometria[
+          geometria.length - 1
+        ];
+
+      return {
+        id_osm:
+          String(elemento.id),
+
+        nombre:
+          tags.name ?? null,
+
+        comuna:
+          comuna ?? null,
+
+        tipo,
+
+        categoria_peatonal:
+          obtenerCategoriaPeatonal(
+            tipo,
+            tags
+          ),
+
+        superficie:
+          tags.surface ?? null,
+
+        acceso_peatonal:
+          tags.foot ??
+          tags.access ??
+          null,
+
+        sidewalk:
+          tags.sidewalk ?? null,
+
+        footway:
+          tags.footway ?? null,
+
+        crossing:
+          tags.crossing ?? null,
+
+        smoothness:
+          tags.smoothness ?? null,
+
+        incline:
+          tags.incline ?? null,
+
+        wheelchair:
+          tags.wheelchair ?? null,
+
+        width:
+          tags.width ?? null,
+
+        step_count:
+          tags.step_count
+            ? Number(
+                tags.step_count
+              )
+            : null,
+
+        maxspeed:
+          tags.maxspeed ?? null,
+
+        motorroad:
+          tags.motorroad ?? null,
+
+        nodo_inicio:
+          nodoInicio.nodo_id,
+
+        nodo_fin:
+          nodoFin.nodo_id,
+
+        geometria,
+
+        cantidad_nodos:
+          geometria.length,
+
+        longitud_metros:
+          calcularLongitudTotal(
+            geometria
+          ),
+      };
+    });
+};
+
+/*
+ * ==========================================================
+ * CARGAR GRUPO DESDE OVERPASS
+ * ==========================================================
+ */
+
+const obtenerGrupoDesdeOverpass = async ({
+  grupo,
+  indiceGrupo,
+  comuna,
+  bbox,
+}) => {
+  const particionCache = `${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bbox)}`;
+  const cacheComuna = obtenerCacheComuna(particionCache);
+  const claveCarga = `${particionCache}|grupo:${indiceGrupo}`;
+
+  const entradaCache =
+    cacheComuna.get(
+      indiceGrupo
+    );
+
+  if (
+    cacheEstaVigente(
+      entradaCache
+    )
+  ) {
+    console.log(
+      `CACHÃ‰ HIT - ${
+        comuna || "BBOX"
+      } - grupo ${
+        indiceGrupo + 1
+      }/${GRUPOS_HIGHWAYS.length}: ${
+        entradaCache.segmentos.length
+      } segmentos`
+    );
+
+    return entradaCache.segmentos;
+  }
+
+  console.log(
+    `CACHÃ‰ MISS - ${
+      comuna || "BBOX"
+    } - grupo ${
+      indiceGrupo + 1
+    }/${GRUPOS_HIGHWAYS.length}`
+  );
+
+  const consulta =
+    construirConsulta(
+      grupo,
+      comuna
+    );
+
+  try {
+    return await ejecutarUnaCarga(claveCarga, async () => {
+    const resultado =
+      await ejecutarConsultaOverpass(
+        consulta,
+        `${
+          comuna || "BBOX"
+        } / grupo ${
+          indiceGrupo + 1
+        } de ${
+          GRUPOS_HIGHWAYS.length
+        }`
+      );
+
+    const segmentos =
+      transformarSegmentos(
+        resultado.elements || [],
+        comuna
+      );
+
+    cacheComuna.set(
+      indiceGrupo,
+      {
+        segmentos,
+        fecha: Date.now(),
+      }
+    );
+
+    console.log(
+      `CACHÃ‰ GUARDADO - ${
+        comuna || "BBOX"
+      } - grupo ${
+        indiceGrupo + 1
+      }/${
+        GRUPOS_HIGHWAYS.length
+      }: ${
+        segmentos.length
+      } segmentos`
+    );
+
+    return segmentos;
+    });
+  } catch (error) {
+    throw new Error(
+      `No se pudo cargar la red peatonal de ${
+        comuna || "la RegiÃ³n"
+      }. FallÃ³ el grupo ${
+        indiceGrupo + 1
+      }/${
+        GRUPOS_HIGHWAYS.length
+      }: ${
+        error.message
+      }`
+    );
+  }
+};
+
+/*
+ * ==========================================================
+ * OBTENER RED PEATONAL
+ * ==========================================================
+ */
+
+const obtenerRedPeatonal = async ({
+  highway,
+  comuna,
+  bbox,
+  soloSupabase = false,
+} = {}) => {
+  const bboxNormalizado =
+    normalizarBbox(
+      bbox
+    );
+
+  if (soloSupabase && (!bboxNormalizado || highway)) {
+    return [];
+  }
+
+  /*
+   * ========================================================
+   * HIGHWAY ESPECÃFICO
+   * ========================================================
+   */
+
+  if (highway) {
+    if (
+      !HIGHWAY_VALIDOS.includes(
+        highway
+      )
+    ) {
+      throw new Error(
+        `Tipo de highway no permitido: ${highway}`
+      );
+    }
+
+    /*
+     * Para highway especÃ­fico mantenemos
+     * el comportamiento actual.
+     */
+
+    const particionCache = `${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bboxNormalizado)}`;
+    const cacheComuna = obtenerCacheComuna(particionCache);
+
+    const claveCache =
+      `highway:${highway}`;
+
+    const entradaCache =
+      cacheComuna.get(
+        claveCache
+      );
+
+    let segmentos;
+
+    if (
+      cacheEstaVigente(
+        entradaCache
+      )
+    ) {
+      console.log(
+        `CACHÃ‰ HIT - ${
+          comuna || "BBOX"
+        } - ${highway}: ${
+          entradaCache.segmentos.length
+        } segmentos`
+      );
+
+      segmentos =
+        entradaCache.segmentos;
+    } else {
+      console.log(`CACHÃ‰ MISS - ${comuna || "BBOX"} - ${highway}`);
+      segmentos = await ejecutarUnaCarga(`${particionCache}|${claveCache}`, async () => {
+        const entradaDuranteEspera = cacheComuna.get(claveCache);
+        if (cacheEstaVigente(entradaDuranteEspera)) return entradaDuranteEspera.segmentos;
+
+        const consulta = construirConsulta([highway], comuna);
+        const resultado = await ejecutarConsultaOverpass(
+          consulta,
+          `${comuna || "BBOX"} / ${highway}`
+        );
+        const cargados = transformarSegmentos(resultado.elements || [], comuna);
+
+        cacheComuna.set(claveCache, { segmentos: cargados, fecha: Date.now() });
+        if (comuna && cargados.length > 0) {
+          try {
+            await guardarEnSupabase(cargados);
+          } catch (error) {
+            console.warn("No fue posible guardar highway especÃ­fico en Supabase:", error.message);
+          }
+        }
+        return cargados;
+      });
+    }
+
+    return filtrarPorBbox(
+      segmentos,
+      bboxNormalizado
+    );
+  }
+
+  /*
+   * ========================================================
+   * INTENTAR SUPABASE PRIMERO
+   * ========================================================
+   */
+
+  if (comuna || (soloSupabase && bboxNormalizado)) {
+    const claveSupabase = `supabase|${obtenerClaveCache(comuna)}|bbox:${serializarBbox(bboxNormalizado)}|soloBbox:${soloSupabase}`;
+    const particionCache = obtenerCacheComuna("resultados-red");
+    const cacheSupabase = particionCache.get(claveSupabase);
+    let resultadoSupabase;
+
+    if (cacheEstaVigente(cacheSupabase)) {
+      resultadoSupabase = cacheSupabase.resultado;
+    } else {
+      resultadoSupabase = await ejecutarUnaCarga(claveSupabase, async () => {
+        const cacheDuranteEspera = particionCache.get(claveSupabase);
+        if (cacheEstaVigente(cacheDuranteEspera)) return cacheDuranteEspera.resultado;
+        const resultado = await obtenerRedDesdeSupabase(
+          comuna,
+          bboxNormalizado,
+          { soloBbox: soloSupabase }
+        );
+        if (!resultado.consultaFallida) {
+          particionCache.set(claveSupabase, {
+            resultado,
+            fecha: Date.now(),
+          });
+        }
+        return resultado;
+      });
+    }
+
+    if (
+      resultadoSupabase.encontrada
+    ) {
+      console.log(
+        `Red peatonal ${comuna}: ${resultadoSupabase.segmentos.length} segmentos ${
+          bboxNormalizado
+            ? "dentro del BBOX"
+            : "totales"
+        }`
+      );
+
+      return resultadoSupabase.segmentos;
+    }
+  }
+
+  // Las rutas no deben consultar Overpass: los datos se cargan por separado
+  // y /api/rutas solo consume los segmentos ya persistidos en red_peatonal.
+  if (soloSupabase) {
+    return [];
+  }
+
+  /*
+   * ========================================================
+   * CACHE / OVERPASS
+   * ========================================================
+   */
+
+  const segmentosTodos = [];
+
+  for (
+    let i = 0;
+    i < GRUPOS_HIGHWAYS.length;
+    i++
+  ) {
+    const grupo =
+      GRUPOS_HIGHWAYS[i];
+
+    const segmentosGrupo =
+      await obtenerGrupoDesdeOverpass({
+        grupo,
+        indiceGrupo: i,
+        comuna,
+        bbox: bboxNormalizado,
+      });
+
+    segmentosTodos.push(
+      ...segmentosGrupo
+    );
+
+    if (
+      i <
+      GRUPOS_HIGHWAYS.length - 1
+    ) {
+      await esperar(
+        5000
+      );
+    }
+  }
+
+  /*
+   * ========================================================
+   * ELIMINAR DUPLICADOS
+   * ========================================================
+   */
+
+  const mapaUnico =
+    new Map();
+
+  for (
+    const segmento of
+      segmentosTodos
+  ) {
+    mapaUnico.set(
+      segmento.id_osm,
+      segmento
+    );
+  }
+
+  const resultado =
+    Array.from(
+      mapaUnico.values()
+    );
+
+  /*
+   * ========================================================
+   * GUARDAR EN SUPABASE
+   * ========================================================
+   */
+
+  if (
+    comuna &&
+    resultado.length > 0
+  ) {
+    try {
+      await guardarEnSupabase(
+        resultado
+      );
+
+      console.log(
+        `SUPABASE - Red peatonal ${comuna} persistida: ${resultado.length} segmentos`
+      );
+    } catch (error) {
+      /*
+       * No detenemos el endpoint si Supabase
+       * falla. Overpass sigue funcionando
+       * como respaldo.
+       */
+      console.warn(
+        `No fue posible persistir la red peatonal de ${comuna} en Supabase:`,
+        error.message
+      );
+    }
+  }
+
+  /*
+   * ========================================================
+   * APLICAR BBOX
+   * ========================================================
+   */
+
+  const resultadoFiltrado =
+    filtrarPorBbox(
+      resultado,
+      bboxNormalizado
+    );
+
+  console.log(
+    `Red peatonal ${
+      comuna || "BBOX"
+    }: ${
+      resultadoFiltrado.length
+    } segmentos ${
+      bboxNormalizado
+        ? "dentro del BBOX"
+        : "totales"
+    }`
+  );
+
+  return resultadoFiltrado;
+};
+
+module.exports = {
+  obtenerRedPeatonal,
+  obtenerCategoriaPeatonal,
+};
+
+========== src/services/riesgo-red.service.js ==========
+
+const {
+  obtenerZonasRiesgo,
+} = require("./zonas-riesgo.service");
+
+const {
+  obtenerRedPeatonal,
+} = require("./red-peatonal.service");
+
+const {
+  calcularCostoNavegacion,
+  obtenerLongitudMaxima,
+} = require("./costo-ruta.service");
+
+const TAMANO_CELDA = 0.004;
+
+/*
+ * ==========================================================
+ * GEOMETRÃA DE ZONAS
+ * ==========================================================
+ */
+
+/*
+ * Convierte una clave de zona:
+ *
+ * "-8241:-17878"
+ *
+ * en sus lÃ­mites geogrÃ¡ficos.
+ */
+const obtenerLimitesZona = (
+  idZona
+) => {
+  const partes =
+    String(idZona).split(":");
+
+  if (
+    partes.length !== 2
+  ) {
+    return null;
+  }
+
+  const fila =
+    Number(partes[0]);
+
+  const columna =
+    Number(partes[1]);
+
+  if (
+    !Number.isFinite(fila) ||
+    !Number.isFinite(columna)
+  ) {
+    return null;
+  }
+
+  const minLat =
+    fila * TAMANO_CELDA;
+
+  const maxLat =
+    (fila + 1) *
+    TAMANO_CELDA;
+
+  const minLon =
+    columna * TAMANO_CELDA;
+
+  const maxLon =
+    (columna + 1) *
+    TAMANO_CELDA;
+
+  return {
+    minLat,
+    minLon,
+    maxLat,
+    maxLon,
+  };
+};
+
+/*
+ * ==========================================================
+ * GEOMETRÃA DE SEGMENTOS
+ * ==========================================================
+ */
+
+/*
+ * Calcula la longitud euclidiana aproximada
+ * de un tramo en coordenadas geogrÃ¡ficas.
+ *
+ * Para comparar proporciones dentro de una misma zona
+ * es suficiente para esta versiÃ³n.
+ */
+const distanciaPlano = (
+  puntoA,
+  puntoB
+) => {
+  const deltaLat =
+    Number(puntoB.latitud) -
+    Number(puntoA.latitud);
+
+  const deltaLon =
+    Number(puntoB.longitud) -
+    Number(puntoA.longitud);
+
+  return Math.sqrt(
+    deltaLat ** 2 +
+      deltaLon ** 2
+  );
+};
+
+/*
+ * Calcula quÃ© proporciÃ³n de un segmento lineal
+ * queda dentro de un rectÃ¡ngulo.
+ *
+ * Utiliza Liang-Barsky.
+ */
+const proporcionDentroRectangulo = (
+  puntoA,
+  puntoB,
+  zona
+) => {
+  const x1 = Number(
+    puntoA.longitud
+  );
+
+  const y1 = Number(
+    puntoA.latitud
+  );
+
+  const x2 = Number(
+    puntoB.longitud
+  );
+
+  const y2 = Number(
+    puntoB.latitud
+  );
+
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  const p = [
+    -dx,
+    dx,
+    -dy,
+    dy,
+  ];
+
+  const q = [
+    x1 - zona.minLon,
+    zona.maxLon - x1,
+    y1 - zona.minLat,
+    zona.maxLat - y1,
+  ];
+
+  let tEntrada = 0;
+  let tSalida = 1;
+
+  for (
+    let i = 0;
+    i < 4;
+    i++
+  ) {
+    if (p[i] === 0) {
+      if (q[i] < 0) {
+        return 0;
+      }
+
+      continue;
+    }
+
+    const t =
+      q[i] / p[i];
+
+    if (p[i] < 0) {
+      if (t > tSalida) {
+        return 0;
+      }
+
+      if (t > tEntrada) {
+        tEntrada = t;
+      }
+    } else {
+      if (t < tEntrada) {
+        return 0;
+      }
+
+      if (t < tSalida) {
+        tSalida = t;
+      }
+    }
+  }
+
+  if (
+    tEntrada > tSalida
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      1,
+      tSalida - tEntrada
+    )
+  );
+};
+
+/*
+ * Calcula cuÃ¡nto del segmento completo
+ * cae dentro de una zona.
+ */
+const calcularLongitudDentroZona = (
+  geometria,
+  zona
+) => {
+  if (
+    !Array.isArray(geometria) ||
+    geometria.length < 2
+  ) {
+    return 0;
+  }
+
+  let longitudTotal = 0;
+  let longitudDentro = 0;
+
+  for (
+    let i = 0;
+    i < geometria.length - 1;
+    i++
+  ) {
+    const puntoA =
+      geometria[i];
+
+    const puntoB =
+      geometria[i + 1];
+
+    const longitudTramo =
+      distanciaPlano(
+        puntoA,
+        puntoB
+      );
+
+    if (
+      longitudTramo <= 0
+    ) {
+      continue;
+    }
+
+    longitudTotal +=
+      longitudTramo;
+
+    const proporcion =
+      proporcionDentroRectangulo(
+        puntoA,
+        puntoB,
+        zona
+      );
+
+    longitudDentro +=
+      longitudTramo *
+      proporcion;
+  }
+
+  if (
+    longitudTotal <= 0
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    1,
+    Math.max(
+      0,
+      longitudDentro /
+        longitudTotal
+    )
+  );
+};
+
+/*
+ * ==========================================================
+ * RIESGO DE SEGMENTOS
+ * ==========================================================
+ */
+
+const clasificarNivel = (
+  puntaje
+) => {
+  if (puntaje <= 33) {
+    return "Bajo";
+  }
+
+  if (puntaje <= 66) {
+    return "Medio";
+  }
+
+  return "Alto";
+};
+
+const calcularRiesgoSegmento = (
+  segmento,
+  zonas
+) => {
+  const zonasIntersectadas = [];
+
+  let sumaPonderada = 0;
+  let pesoTotal = 0;
+
+  for (
+    const zona of zonas
+  ) {
+    const limites =
+      obtenerLimitesZona(
+        zona.id_zona
+      );
+
+    if (!limites) {
+      continue;
+    }
+
+    const proporcion =
+      calcularLongitudDentroZona(
+        segmento.geometria,
+        limites
+      );
+
+    if (
+      proporcion <= 0
+    ) {
+      continue;
+    }
+
+    const puntaje =
+      Number(
+        zona.puntajeFinal
+      );
+
+    if (
+      !Number.isFinite(
+        puntaje
+      )
+    ) {
+      continue;
+    }
+
+    zonasIntersectadas.push({
+      id_zona:
+        zona.id_zona,
+
+      nivel:
+        zona.nivel,
+
+      puntajeFinal:
+        puntaje,
+
+      proporcion:
+        Number(
+          proporcion.toFixed(4)
+        ),
+    });
+
+    sumaPonderada +=
+      puntaje *
+      proporcion;
+
+    pesoTotal +=
+      proporcion;
+  }
+
+  if (
+    pesoTotal === 0
+  ) {
+    return {
+      puntajeRiesgo: 0,
+      nivelRiesgo: "Bajo",
+      zonasIntersectadas: [],
+      cantidadZonasIntersectadas: 0,
+    };
+  }
+
+  const puntajeRiesgo =
+    sumaPonderada /
+    pesoTotal;
+
+  return {
+    puntajeRiesgo:
+      Number(
+        puntajeRiesgo.toFixed(2)
+      ),
+
+    nivelRiesgo:
+      clasificarNivel(
+        puntajeRiesgo
+      ),
+
+    zonasIntersectadas,
+
+    cantidadZonasIntersectadas:
+      zonasIntersectadas.length,
+  };
+};
+
+/*
+ * ==========================================================
+ * OBTENER RED CON RIESGO
+ * ==========================================================
+ */
+
+const obtenerRedPeatonalConRiesgo =
+  async ({
+    comuna,
+    rangoHorario,
+    bbox,
+    soloSupabase = false,
+  }) => {
+    const [zonas, red] =
+      await Promise.all([
+        obtenerZonasRiesgo({
+          comuna,
+          rangoHorario,
+        }),
+
+        obtenerRedPeatonal({
+          comuna,
+          bbox,
+          soloSupabase,
+        }),
+      ]);
+
+    const longitudMaxima =
+      obtenerLongitudMaxima(
+        red
+      );
+
+    return red.map(
+      (segmento) => {
+        const resultado =
+          calcularRiesgoSegmento(
+            segmento,
+            zonas
+          );
+
+        const costos =
+          calcularCostoNavegacion({
+            puntajeRiesgo:
+              resultado.puntajeRiesgo,
+
+            longitudMetros:
+              segmento.longitud_metros,
+
+            longitudMaxima,
+          });
+
+        return {
+          ...segmento,
+
+          puntaje_riesgo:
+            resultado.puntajeRiesgo,
+
+          nivel_riesgo:
+            resultado.nivelRiesgo,
+
+          zonas_intersectadas:
+            resultado.zonasIntersectadas,
+
+          cantidad_zonas_intersectadas:
+            resultado.cantidadZonasIntersectadas,
+
+          costo_riesgo:
+            costos.costo_riesgo,
+
+          costo_riesgo_normalizado:
+            costos.costo_riesgo,
+
+          costo_distancia:
+            costos.costo_distancia,
+
+          costo_distancia_normalizado:
+            costos.costo_distancia,
+
+          costo_navegacion:
+            costos.costo_navegacion,
+
+          costo_navegacion_normalizado:
+            costos.costo_navegacion,
+        };
+      }
+    );
+  };
+
+module.exports = {
+  obtenerRedPeatonalConRiesgo,
+  calcularRiesgoSegmento,
+  obtenerLimitesZona,
+  calcularLongitudDentroZona,
+  proporcionDentroRectangulo,
+};
+
+========== src/utils/proyeccion-punto-segmento.js ==========
+
+
+const METROS_POR_GRADO_LATITUD = 111320;
+
+const proyectarPuntoSobreSegmento = (
+  latitud,
+  longitud,
+  nodoA,
+  nodoB
+) => {
+  const lat = Number(latitud);
+  const lon = Number(longitud);
+  const latA = Number(nodoA?.latitud);
+  const lonA = Number(nodoA?.longitud);
+  const latB = Number(nodoB?.latitud);
+  const lonB = Number(nodoB?.longitud);
+
+  if (![lat, lon, latA, lonA, latB, lonB].every(Number.isFinite)) {
+    return null;
+  }
+
+  const latitudRad = (lat * Math.PI) / 180;
+  const escalaX = METROS_POR_GRADO_LATITUD * Math.cos(latitudRad);
+  const escalaY = METROS_POR_GRADO_LATITUD;
+
+  if (Math.abs(escalaX) < 0.01) return null;
+
+  const ax = (lonA - lon) * escalaX;
+  const ay = (latA - lat) * escalaY;
+  const bx = (lonB - lon) * escalaX;
+  const by = (latB - lat) * escalaY;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+
+  const longitudCuadrada = dx * dx + dy * dy;
+
+  if (longitudCuadrada <= 0) return null;
+
+  const fraccion = Math.max(
+    0,
+    Math.min(
+      1,
+      -(ax * dx + ay * dy) / longitudCuadrada
+    )
+  );
+
+  const xProyectado = ax + fraccion * dx;
+  const yProyectado = ay + fraccion * dy;
+
+  return {
+    fraccion,
+    punto: {
+      latitud: lat + yProyectado / escalaY,
+      longitud: lon + xProyectado / escalaX
+    },
+    distancia_proyeccion_metros: Number(
+      Math.hypot(xProyectado, yProyectado).toFixed(2)
+    )
+  };
+};
+
+const obtenerAristaMasCercanaEnGrafo = (
+  nodos,
+  aristas,
+  latitud,
+  longitud
+) => {
+  if (!Array.isArray(nodos) || !Array.isArray(aristas)) {
+    return null;
+  }
+
+  const nodosPorId = new Map(
+    nodos.map((nodo) => [nodo.id, nodo])
+  );
+
+  let mejorResultado = null;
+  let distanciaMinima = Infinity;
+
+  for (const arista of aristas) {
+    const nodoOrigen = nodosPorId.get(arista?.nodo_origen);
+    const nodoDestino = nodosPorId.get(arista?.nodo_destino);
+
+    if (!nodoOrigen || !nodoDestino) {
+      continue;
+    }
+
+    const proyeccion = proyectarPuntoSobreSegmento(
+      latitud,
+      longitud,
+      nodoOrigen,
+      nodoDestino
+    );
+
+    if (!proyeccion) {
+      continue;
+    }
+
+    if (proyeccion.distancia_proyeccion_metros < distanciaMinima) {
+      distanciaMinima = proyeccion.distancia_proyeccion_metros;
+
+      mejorResultado = {
+        arista,
+        nodo_origen: nodoOrigen,
+        nodo_destino: nodoDestino,
+        fraccion: proyeccion.fraccion,
+        punto: proyeccion.punto,
+        distancia_proyeccion_metros: distanciaMinima,
+      };
+    }
+  }
+
+  return mejorResultado;
+};
+
+const integrarProyeccionesEnGrafo = (
+  nodos,
+  aristas,
+  proyecciones
+) => {
+  if (
+    !Array.isArray(nodos) ||
+    !Array.isArray(aristas) ||
+    !Array.isArray(proyecciones)
+  ) {
+    return null;
+  }
+
+  const nodosResultado = nodos.map((nodo) => ({
+    ...nodo,
+    conexiones: [],
+  }));
+
+  const nodosPorId = new Map(
+    nodosResultado.map((nodo) => [nodo.id, nodo])
+  );
+
+  const aristasOriginales = new Set(aristas);
+  const proyeccionesPorArista = new Map();
+  const nodosPorProyeccion = {};
+  const idsProyeccion = new Set();
+
+  // Agrupar las proyecciones por su arista original.
+  for (const proyeccion of proyecciones) {
+    if (
+      !proyeccion?.id ||
+      idsProyeccion.has(proyeccion.id) ||
+      !aristasOriginales.has(proyeccion.arista)
+    ) {
+      return null;
+    }
+
+    idsProyeccion.add(proyeccion.id);
+
+    const fraccion = Number(proyeccion.fraccion);
+    const latitud = Number(proyeccion.punto?.latitud);
+    const longitud = Number(proyeccion.punto?.longitud);
+
+    if (
+      !Number.isFinite(fraccion) ||
+      fraccion < 0 ||
+      fraccion > 1 ||
+      !Number.isFinite(latitud) ||
+      !Number.isFinite(longitud)
+    ) {
+      return null;
+    }
+
+    if (!nodosPorProyeccion[proyeccion.id]) {
+      nodosPorProyeccion[proyeccion.id] = null;
+    }
+
+    if (!proyeccionesPorArista.has(proyeccion.arista)) {
+      proyeccionesPorArista.set(proyeccion.arista, []);
+    }
+
+    proyeccionesPorArista.get(proyeccion.arista).push({
+      id: proyeccion.id,
+      fraccion,
+      latitud,
+      longitud,
+    });
+  }
+
+  // Crear los nodos virtuales y resolver posiciones coincidentes.
+  for (const [arista, elementos] of proyeccionesPorArista) {
+    const elementosOrdenados = [...elementos].sort(
+      (a, b) => a.fraccion - b.fraccion
+    );
+
+    const puntosUnicos = [];
+
+    for (const elemento of elementosOrdenados) {
+      let puntoExistente = puntosUnicos.find(
+        (punto) =>
+          Math.abs(punto.fraccion - elemento.fraccion) < 1e-9
+      );
+
+      if (!puntoExistente) {
+        let nodoId;
+
+        if (elemento.fraccion === 0) {
+          nodoId = arista.nodo_origen;
+        } else if (elemento.fraccion === 1) {
+          nodoId = arista.nodo_destino;
+        } else {
+          nodoId = `virtual:${encodeURIComponent(elemento.id)}`;
+
+          let sufijo = 1;
+
+          while (nodosPorId.has(nodoId)) {
+            nodoId = `virtual:${encodeURIComponent(elemento.id)}:${sufijo++}`;
+          }
+
+          const nuevoNodo = {
+            id: nodoId,
+            latitud: elemento.latitud,
+            longitud: elemento.longitud,
+            conexiones: [],
+            es_nodo_virtual: true,
+          };
+
+          nodosResultado.push(nuevoNodo);
+          nodosPorId.set(nodoId, nuevoNodo);
+        }
+
+        puntoExistente = {
+          fraccion: elemento.fraccion,
+          nodo_id: nodoId,
+        };
+
+        puntosUnicos.push(puntoExistente);
+      }
+
+      nodosPorProyeccion[elemento.id] =
+        puntoExistente.nodo_id;
+    }
+  }
+
+  const aristasResultado = [];
+
+  // Dividir cada arista una sola vez, usando todas sus proyecciones.
+  aristas.forEach((arista, indiceArista) => {
+    const elementos = proyeccionesPorArista.get(arista) || [];
+
+    if (elementos.length === 0) {
+      aristasResultado.push(arista);
+      return;
+    }
+
+    const puntos = [
+      {
+        fraccion: 0,
+        nodo_id: arista.nodo_origen,
+      },
+      ...elementos
+        .map((elemento) => ({
+          fraccion: elemento.fraccion,
+          nodo_id: nodosPorProyeccion[elemento.id],
+        }))
+        .filter(
+          (punto) =>
+            punto.fraccion > 0 &&
+            punto.fraccion < 1
+        ),
+      {
+        fraccion: 1,
+        nodo_id: arista.nodo_destino,
+      },
+    ];
+
+    const puntosOrdenados = puntos.sort(
+      (a, b) => a.fraccion - b.fraccion
+    );
+
+    const distanciaOriginal = Number(arista.distancia_metros);
+
+    if (
+      !Number.isFinite(distanciaOriginal) ||
+      distanciaOriginal <= 0
+    ) {
+      return;
+    }
+
+    if (puntosOrdenados.length === 2) {
+      aristasResultado.push(arista);
+      return;
+    }
+
+    for (let i = 0; i < puntosOrdenados.length - 1; i++) {
+      const inicio = puntosOrdenados[i];
+      const fin = puntosOrdenados[i + 1];
+
+      const proporcion = fin.fraccion - inicio.fraccion;
+
+      if (proporcion <= 0) {
+        continue;
+      }
+
+      const escalarCosto = (valor) => {
+        if (valor == null) return valor;
+
+        const numero = Number(valor);
+
+        return Number.isFinite(numero)
+          ? Number((numero * proporcion).toFixed(4))
+          : valor;
+      };
+
+      aristasResultado.push({
+        ...arista,
+
+        id: `${arista.id ?? `arista-${indiceArista}`}:parte:${i + 1}`,
+
+        nodo_origen: inicio.nodo_id,
+        nodo_destino: fin.nodo_id,
+
+        distancia_metros: Number(
+          (distanciaOriginal * proporcion).toFixed(4)
+        ),
+
+        costo_riesgo: escalarCosto(arista.costo_riesgo),
+        costo_distancia: escalarCosto(arista.costo_distancia),
+        costo_arista: escalarCosto(arista.costo_arista),
+        costo_arista_operativo: escalarCosto(
+          arista.costo_arista_operativo
+        ),
+      });
+    }
+  });
+
+  // Reconstruir las conexiones bidireccionales.
+  const conexiones = new Map(
+    nodosResultado.map((nodo) => [nodo.id, new Set()])
+  );
+
+  for (const arista of aristasResultado) {
+    conexiones.get(arista.nodo_origen)?.add(arista.nodo_destino);
+    conexiones.get(arista.nodo_destino)?.add(arista.nodo_origen);
+  }
+
+  for (const nodo of nodosResultado) {
+    nodo.conexiones = Array.from(conexiones.get(nodo.id) || []);
+  }
+
+  return {
+    nodos: nodosResultado,
+    aristas: aristasResultado,
+    nodos_por_proyeccion: nodosPorProyeccion,
+  };
+};
+
+const crearSegmentoConexion = ({
+  id,
+  coordenadaSeleccionada,
+  puntoProyectado,
+  distanciaMetros,
+  aristaReferencia,
+}) => {
+  const distancia = Number(distanciaMetros);
+  const riesgo = Number(aristaReferencia?.puntaje_riesgo);
+
+  const coordenadasValidas = [
+    coordenadaSeleccionada?.latitud,
+    coordenadaSeleccionada?.longitud,
+    puntoProyectado?.latitud,
+    puntoProyectado?.longitud,
+  ].every((valor) => Number.isFinite(Number(valor)));
+
+  if (
+    !id ||
+    !coordenadasValidas ||
+    !Number.isFinite(distancia) ||
+    distancia <= 0 ||
+    !Number.isFinite(riesgo) ||
+    !aristaReferencia
+  ) {
+    return null;
+  }
+
+  return {
+    id: `conector-${id}`,
+    id_osm: null,
+    tipo: "conector_no_mapeado",
+    es_conector: true,
+
+    distancia_metros: Number(distancia.toFixed(2)),
+
+    // EstimaciÃ³n basada en la arista peatonal de referencia.
+    puntaje_riesgo: riesgo,
+    nivel_riesgo: aristaReferencia.nivel_riesgo ?? "No disponible",
+    riesgo_estimado: true,
+    arista_referencia_id: aristaReferencia.id,
+
+    // No se atribuyen zonas de riesgo sin calcular su intersecciÃ³n real.
+    zonas_intersectadas: [],
+
+    inicio: [
+      Number(coordenadaSeleccionada.latitud),
+      Number(coordenadaSeleccionada.longitud),
+    ],
+
+    fin: [
+      Number(puntoProyectado.latitud),
+      Number(puntoProyectado.longitud),
+    ],
+  };
+};
+
+module.exports = {
+  proyectarPuntoSobreSegmento,
+  obtenerAristaMasCercanaEnGrafo,
+  integrarProyeccionesEnGrafo,
+  crearSegmentoConexion,
+};
+
+========== src/services/costo-ruta.service.js ==========
+
+const PESO_RIESGO = 0.7;
+const PESO_DISTANCIA = 0.3;
+
+/** Costo operativo de una arista en unidades de metros ponderados. */
+const calcularCostoOperativoArista = (
+  distanciaMetros,
+  riesgoNormalizado,
+  pesoDistancia,
+  pesoRiesgo
+) => {
+  const entradas = [distanciaMetros, riesgoNormalizado, pesoDistancia, pesoRiesgo];
+  if (entradas.some((valor) =>
+    valor === null || valor === undefined || typeof valor === "boolean" ||
+    (typeof valor === "string" && valor.trim() === "")
+  )) {
+    throw new Error("La distancia, el riesgo y los pesos deben ser valores numÃ©ricos.");
+  }
+
+  const distancia = Number(distanciaMetros);
+  const riesgo = Number(riesgoNormalizado);
+  const pesoD = Number(pesoDistancia);
+  const pesoR = Number(pesoRiesgo);
+
+  if (!Number.isFinite(distancia) || distancia < 0) {
+    throw new Error("La distancia debe ser un nÃºmero finito no negativo.");
+  }
+  if (!Number.isFinite(riesgo) || riesgo < 0 || riesgo > 1) {
+    throw new Error("El riesgo normalizado debe estar entre 0 y 1.");
+  }
+  if (!Number.isFinite(pesoD) || pesoD < 0 || !Number.isFinite(pesoR) || pesoR < 0) {
+    throw new Error("Los pesos deben ser nÃºmeros finitos no negativos.");
+  }
+
+  return distancia * (pesoD + pesoR * riesgo);
+};
+
+const normalizarDistancia = (
+  longitudMetros,
+  longitudMaxima
+) => {
+  const distancia = Number(
+    longitudMetros
+  );
+
+  const maximo = Number(
+    longitudMaxima
+  );
+
+  if (
+    !Number.isFinite(distancia) ||
+    distancia < 0
+  ) {
+    throw new Error(
+      "La longitud del segmento debe ser un nÃºmero no negativo."
+    );
+  }
+
+  if (
+    !Number.isFinite(maximo) ||
+    maximo <= 0
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    distancia / maximo,
+    1
+  );
+};
+
+const calcularCostoRiesgo = (
+  puntajeRiesgo
+) => {
+  const riesgo = Number(
+    puntajeRiesgo
+  );
+
+  if (
+    !Number.isFinite(riesgo)
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    Math.max(riesgo / 100, 0),
+    1
+  );
+};
+
+const calcularCostoNavegacion = ({
+  puntajeRiesgo,
+  longitudMetros,
+  longitudMaxima,
+}) => {
+  const costoRiesgo =
+    calcularCostoRiesgo(
+      puntajeRiesgo
+    );
+
+  const costoDistancia =
+    normalizarDistancia(
+      longitudMetros,
+      longitudMaxima
+    );
+
+  const costoNavegacion =
+    PESO_RIESGO *
+      costoRiesgo +
+    PESO_DISTANCIA *
+      costoDistancia;
+
+  return {
+    costo_riesgo: Number(
+      costoRiesgo.toFixed(4)
+    ),
+
+    costo_distancia: Number(
+      costoDistancia.toFixed(4)
+    ),
+
+    costo_navegacion: Number(
+      costoNavegacion.toFixed(4)
+    ),
+  };
+};
+
+const obtenerLongitudMaxima =
+  (segmentos) => {
+    const longitudes =
+      segmentos
+        .map((segmento) =>
+          Number(
+            segmento.longitud_metros
+          )
+        )
+        .filter(
+          (valor) =>
+            Number.isFinite(valor) &&
+            valor >= 0
+        );
+
+    if (
+      longitudes.length === 0
+    ) {
+      return 0;
+    }
+
+    return Math.max(
+      ...longitudes
+    );
+  };
+
+module.exports = {
+  PESO_RIESGO,
+  PESO_DISTANCIA,
+  calcularCostoOperativoArista,
+  normalizarDistancia,
+  calcularCostoRiesgo,
+  calcularCostoNavegacion,
+  obtenerLongitudMaxima,
+};
+
+========== src/config/perfiles-ruta.config.js ==========
+
+/**
+ * El peso del riesgo determina cuÃ¡nto se penalizan
+ * los segmentos con mayor riesgo.
+ *
+ * El peso de la distancia determina cuÃ¡nto se prioriza
+ * un recorrido corto.
+ */
+
+const PERFILES_RUTA = Object.freeze({
+  menor_riesgo: Object.freeze({
+    nombre: "Menor riesgo",
+    peso_riesgo: 0.9,
+    peso_distancia: 0.1,
+  }),
+
+  equilibrada: Object.freeze({
+    nombre: "Equilibrada",
+    peso_riesgo: 0.5,
+    peso_distancia: 0.5,
+  }),
+
+  mas_rapida: Object.freeze({
+    nombre: "MÃ¡s rÃ¡pida",
+    peso_riesgo: 0.1,
+    peso_distancia: 0.9,
+  }),
+});
+
+module.exports = {
+  PERFILES_RUTA,
+};
+
+========== tests/Integracion/rutas-alternativas.integration.test.js ==========
+
+jest.mock("../../src/services/grafo-peatonal.service", () => ({
+  obtenerGrafoPeatonal: jest.fn(),
+}));
+
+const {
+  obtenerGrafoPeatonal,
+} = require("../../src/services/grafo-peatonal.service");
+
+const {
+  calcularRutaSegura,
+  calcularRutasAlternativas,
+} = require("../../src/services/ruta.service");
+
+const trayecto = {
+  comuna: "ViÃ±a del Mar",
+  origen: {
+    latitud: -33.024,
+    longitud: -71.551,
+  },
+  destino: {
+    latitud: -33.015,
+    longitud: -71.535,
+  },
+  rangoHorario: "20:00 - 23:59",
+};
+
+/*
+ * Grafo con tres recorridos posibles:
+ *
+ * O -> A -> D: corto, pero de alto riesgo.
+ * O -> B -> D: intermedio en distancia y riesgo.
+ * O -> C -> D: mÃ¡s largo, pero de menor riesgo.
+ */
+const crearGrafoTresAlternativas = () => ({
+  nodos: [
+    {
+      id: "O",
+      latitud: -33.024,
+      longitud: -71.551,
+    },
+    {
+      id: "A",
+      latitud: -33.022,
+      longitud: -71.549,
+    },
+    {
+      id: "B",
+      latitud: -33.021,
+      longitud: -71.548,
+    },
+    {
+      id: "C",
+      latitud: -33.020,
+      longitud: -71.547,
+    },
+    {
+      id: "D",
+      latitud: -33.015,
+      longitud: -71.535,
+    },
+  ],
+
+  aristas: [
+    // Alternativa de menor distancia y mayor riesgo.
+    {
+      id_osm: 101,
+      nodo_origen: "O",
+      nodo_destino: "A",
+      distancia_metros: 50,
+      puntaje_riesgo: 100,
+      nivel_riesgo: "Alto",
+      costo_riesgo: 50,
+      costo_distancia: 15,
+      costo_arista: 50,
+      zonas_intersectadas: [],
+    },
+    {
+      id_osm: 102,
+      nodo_origen: "A",
+      nodo_destino: "D",
+      distancia_metros: 50,
+      puntaje_riesgo: 100,
+      nivel_riesgo: "Alto",
+      costo_riesgo: 50,
+      costo_distancia: 15,
+      costo_arista: 50,
+      zonas_intersectadas: [],
+    },
+
+    // Alternativa intermedia.
+    {
+      id_osm: 201,
+      nodo_origen: "O",
+      nodo_destino: "B",
+      distancia_metros: 60,
+      puntaje_riesgo: 40,
+      nivel_riesgo: "Medio",
+      costo_riesgo: 24,
+      costo_distancia: 18,
+      costo_arista: 60,
+      zonas_intersectadas: [],
+    },
+    {
+      id_osm: 202,
+      nodo_origen: "B",
+      nodo_destino: "D",
+      distancia_metros: 60,
+      puntaje_riesgo: 40,
+      nivel_riesgo: "Medio",
+      costo_riesgo: 24,
+      costo_distancia: 18,
+      costo_arista: 60,
+      zonas_intersectadas: [],
+    },
+
+    // Alternativa mÃ¡s larga y de menor riesgo.
+    {
+      id_osm: 301,
+      nodo_origen: "O",
+      nodo_destino: "C",
+      distancia_metros: 100,
+      puntaje_riesgo: 0,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 0,
+      costo_distancia: 30,
+      costo_arista: 30,
+      zonas_intersectadas: [],
+    },
+    {
+      id_osm: 302,
+      nodo_origen: "C",
+      nodo_destino: "D",
+      distancia_metros: 100,
+      puntaje_riesgo: 0,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 0,
+      costo_distancia: 30,
+      costo_arista: 30,
+      zonas_intersectadas: [],
+    },
+  ],
+});
+
+const crearGrafoUnSoloRecorrido = () => ({
+  nodos: [
+    {
+      id: "O",
+      latitud: -33.024,
+      longitud: -71.551,
+    },
+    {
+      id: "X",
+      latitud: -33.020,
+      longitud: -71.548,
+    },
+    {
+      id: "D",
+      latitud: -33.015,
+      longitud: -71.535,
+    },
+  ],
+
+  aristas: [
+    {
+      id_osm: 401,
+      nodo_origen: "O",
+      nodo_destino: "X",
+      distancia_metros: 70,
+      puntaje_riesgo: 30,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 21,
+      costo_distancia: 21,
+      costo_arista: 70,
+      zonas_intersectadas: [],
+    },
+    {
+      id_osm: 402,
+      nodo_origen: "X",
+      nodo_destino: "D",
+      distancia_metros: 70,
+      puntaje_riesgo: 30,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 21,
+      costo_distancia: 21,
+      costo_arista: 70,
+      zonas_intersectadas: [],
+    },
+  ],
+});
+
+const crearGrafoSinConexion = () => ({
+  nodos: [
+    {
+      id: "O",
+      latitud: -33.024,
+      longitud: -71.551,
+    },
+    {
+      id: "A",
+      latitud: -33.023,
+      longitud: -71.550,
+    },
+    {
+      id: "X",
+      latitud: -33.016,
+      longitud: -71.536,
+    },
+    {
+      id: "D",
+      latitud: -33.015,
+      longitud: -71.535,
+    },
+  ],
+
+  aristas: [
+    {
+      id_osm: 501,
+      nodo_origen: "O",
+      nodo_destino: "A",
+      distancia_metros: 50,
+      puntaje_riesgo: 10,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 5,
+      costo_distancia: 15,
+      costo_arista: 50,
+      zonas_intersectadas: [],
+    },
+    {
+      id_osm: 502,
+      nodo_origen: "X",
+      nodo_destino: "D",
+      distancia_metros: 50,
+      puntaje_riesgo: 10,
+      nivel_riesgo: "Bajo",
+      costo_riesgo: 5,
+      costo_distancia: 15,
+      costo_arista: 50,
+      zonas_intersectadas: [],
+    },
+  ],
+});
+
+const crearGrafoCalibracion = () => {
+  const nodos = [
+    ["O", -33.024, -71.551], ["I", -33.023, -71.550],
+    ["A", -33.022, -71.549], ["B", -33.021, -71.548],
+    ["C", -33.020, -71.547], ["E", -33.019, -71.546],
+    ["J", -33.018, -71.545], ["D", -33.015, -71.535],
+  ].map(([id, latitud, longitud]) => ({ id, latitud, longitud }));
+  const arista = (id, nodo_origen, nodo_destino, distancia_metros, puntaje_riesgo, nombre = "Corredor") => ({
+    id, id_osm: id, nodo_origen, nodo_destino, distancia_metros,
+    puntaje_riesgo, nombre, zonas_intersectadas: [],
+  });
+  return {
+    nodos,
+    aristas: [
+      arista("inicio", "O", "I", 20, 10, "Inicio comÃºn"),
+      arista("A1", "I", "A", 30, 80, "Alternativa A"), arista("A2", "A", "J", 30, 80, "Alternativa A"),
+      arista("B1", "I", "B", 40, 60, "Alternativa B"), arista("B2", "B", "J", 40, 60, "Alternativa B"),
+      arista("C1", "I", "C", 55, 35, "Alternativa C"), arista("C2", "C", "J", 55, 35, "Alternativa C"),
+      arista("E1", "I", "E", 70, 15, "Alternativa E"), arista("E2", "E", "J", 70, 15, "Alternativa E"),
+      arista("fin", "J", "D", 20, 10, "Fin comÃºn"),
+    ],
+  };
+};
+
+const crearGrafoAltaSimilitud = (riesgoAlternativa, distanciaAlternativa) => ({
+  nodos: [
+    { id: "O", latitud: trayecto.origen.latitud, longitud: trayecto.origen.longitud },
+    // Ambos recorridos siguen el mismo eje; sus cortes OSM son distintos.
+    { id: "A", latitud: trayecto.origen.latitud + (trayecto.destino.latitud - trayecto.origen.latitud) * 0.4, longitud: trayecto.origen.longitud + (trayecto.destino.longitud - trayecto.origen.longitud) * 0.4 },
+    { id: "B", latitud: trayecto.origen.latitud + (trayecto.destino.latitud - trayecto.origen.latitud) * 0.6, longitud: trayecto.origen.longitud + (trayecto.destino.longitud - trayecto.origen.longitud) * 0.6 },
+    { id: "D", latitud: trayecto.destino.latitud, longitud: trayecto.destino.longitud },
+  ],
+  aristas: [
+    { id: "via-a1", id_osm: 1, nodo_origen: "O", nodo_destino: "A", distancia_metros: 50, puntaje_riesgo: 60, nombre: "Misma avenida", zonas_intersectadas: [] },
+    { id: "via-a2", id_osm: 1, nodo_origen: "A", nodo_destino: "D", distancia_metros: 50, puntaje_riesgo: 60, nombre: "Misma avenida", zonas_intersectadas: [] },
+    { id: "via-b1", id_osm: 2, nodo_origen: "O", nodo_destino: "B", distancia_metros: distanciaAlternativa / 2, puntaje_riesgo: riesgoAlternativa, nombre: "Misma avenida", zonas_intersectadas: [] },
+    { id: "via-b2", id_osm: 2, nodo_origen: "B", nodo_destino: "D", distancia_metros: distanciaAlternativa / 2, puntaje_riesgo: riesgoAlternativa, nombre: "Misma avenida", zonas_intersectadas: [] },
+  ],
+});
+
+const crearGrafoParalelo = () => ({
+  nodos: [
+    { id: "O", latitud: trayecto.origen.latitud, longitud: trayecto.origen.longitud },
+    { id: "D", latitud: trayecto.destino.latitud, longitud: trayecto.destino.longitud },
+  ],
+  aristas: [
+    { id: "seguro", id_osm: 1, nodo_origen: "O", nodo_destino: "D", distancia_metros: 100, puntaje_riesgo: 10, nombre: "Calle segura", zonas_intersectadas: [] },
+    { id: "riesgoso", id_osm: 2, nodo_origen: "O", nodo_destino: "D", distancia_metros: 80, puntaje_riesgo: 90, nombre: "Calle rÃ¡pida", zonas_intersectadas: [] },
+  ],
+});
+
+const crearProyeccionDelTrayecto = () => {
+  const latOrigen = trayecto.origen.latitud;
+  const lonOrigen = trayecto.origen.longitud;
+  const dx = (trayecto.destino.longitud - lonOrigen) * 111320 * Math.cos(latOrigen * Math.PI / 180);
+  const dy = (trayecto.destino.latitud - latOrigen) * 111320;
+  const longitud = Math.hypot(dx, dy);
+  const ux = dx / longitud;
+  const uy = dy / longitud;
+  const px = -uy;
+  const py = ux;
+  return (avance, desplazamiento = 0) => {
+    const x = ux * avance + px * desplazamiento;
+    const y = uy * avance + py * desplazamiento;
+    return {
+      latitud: latOrigen + y / 111320,
+      longitud: lonOrigen + x / (111320 * Math.cos(latOrigen * Math.PI / 180)),
+    };
+  };
+};
+
+const crearGrafoCasoACorredorCompartido = () => {
+  const punto = crearProyeccionDelTrayecto();
+
+  // Distancia geomÃ©trica real entre el origen y el destino.
+  // Debe coincidir con la longitud utilizada por la proyecciÃ³n.
+  const dx =
+    (trayecto.destino.longitud - trayecto.origen.longitud) *
+    111320 *
+    Math.cos(trayecto.origen.latitud * Math.PI / 180);
+
+  const dy =
+    (trayecto.destino.latitud - trayecto.origen.latitud) *
+    111320;
+
+  const longitud = Math.hypot(dx, dy);
+
+  const nodos = [
+    { id: "O", ...punto(0) },
+    { id: "D", ...punto(longitud) },
+    { id: "A0", ...punto(10) },
+    { id: "A1", ...punto(longitud - 10) },
+    { id: "B0", ...punto(10, 7.67) },
+    { id: "B1", ...punto(longitud - 10, 7.67) },
+  ];
+
+  const arista = (
+    id,
+    id_osm,
+    nodo_origen,
+    nodo_destino,
+    distancia_metros,
+    puntaje_riesgo
+  ) => ({
+    id,
+    id_osm,
+    nodo_origen,
+    nodo_destino,
+    distancia_metros,
+    puntaje_riesgo,
+    nombre: "Avenida del Corredor",
+    tipo: "primary",
+    sidewalk: null,
+    zonas_intersectadas: [],
+  });
+
+  return {
+    nodos,
+    aristas: [
+      arista("a-inicio", 1001, "O", "A0", 10, 47),
+      arista("a-corredor", 1001, "A0", "A1", 1594.76, 47),
+      arista("a-fin", 1001, "A1", "D", 10, 47),
+
+      arista("b-inicio", 2002, "O", "B0", 12.6, 48.57),
+      arista("b-corredor", 2002, "B0", "B1", 1562.32, 48.57),
+      arista("b-fin", 2002, "B1", "D", 12.6, 48.57),
+    ],
+  };
+};
+
+const crearGrafoCasoBAlternativasDistintas = () => {
+  const punto = crearProyeccionDelTrayecto();
+  const largo = Math.hypot(
+    (trayecto.destino.longitud - trayecto.origen.longitud) * 111320 * Math.cos(trayecto.origen.latitud * Math.PI / 180),
+    (trayecto.destino.latitud - trayecto.origen.latitud) * 111320,
+  );
+  const opciones = [
+    { perfil: "menor", nodo: "A", distancia: 1202.61, riesgo: 44.61, offset: 0, nombre: "Calle A" },
+    { perfil: "equilibrada", nodo: "B", distancia: 1189.58, riesgo: 45.68, offset: 300, nombre: "Calle B" },
+    { perfil: "rapida", nodo: "C", distancia: 1165.04, riesgo: 50.87, offset: -300, nombre: "Calle C" },
+  ];
+  const nodos = [{ id: "O", ...punto(0) }, { id: "D", ...punto(largo) }];
+  const aristas = [];
+  for (const opcion of opciones) {
+    nodos.push({ id: `${opcion.nodo}M`, ...punto(largo / 2, opcion.offset) });
+    aristas.push(
+      { id: `${opcion.nodo}1`, id_osm: `${opcion.nodo}-osm`, nodo_origen: "O", nodo_destino: `${opcion.nodo}M`, distancia_metros: opcion.distancia / 2, puntaje_riesgo: opcion.riesgo, nombre: opcion.nombre, tipo: "residential", zonas_intersectadas: [] },
+      { id: `${opcion.nodo}2`, id_osm: `${opcion.nodo}-osm`, nodo_origen: `${opcion.nodo}M`, nodo_destino: "D", distancia_metros: opcion.distancia / 2, puntaje_riesgo: opcion.riesgo, nombre: opcion.nombre, tipo: "residential", zonas_intersectadas: [] },
+    );
+  }
+  return { nodos, aristas };
+};
+
+describe("GeneraciÃ³n de rutas alternativas", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    obtenerGrafoPeatonal.mockResolvedValue(
+      crearGrafoTresAlternativas()
+    );
+  });
+
+  test("debe generar tres recorridos diferentes", async () => {
+    const resultado =
+      await calcularRutasAlternativas(trayecto);
+
+    expect(resultado.encontrada).toBe(true);
+    expect(resultado.cantidad_rutas).toBe(3);
+    expect(resultado.rutas).toHaveLength(3);
+
+    expect(
+      resultado.rutas.map((ruta) => ruta.perfil_ruta)
+    ).toEqual([
+      "menor_riesgo",
+      "equilibrada",
+      "mas_rapida",
+    ]);
+
+    expect(
+      resultado.rutas.map((ruta) => ruta.nodos_ruta)
+    ).toEqual([
+      ["O", "C", "D"],
+      ["O", "B", "D"],
+      ["O", "A", "D"],
+    ]);
+
+    expect(
+      resultado.rutas.map(
+        (ruta) => ruta.tiempo_estimado_minutos
+      )
+    ).toEqual([2.8, 1.7, 1.4]);
+  });
+
+  test("debe consultar el grafo peatonal una sola vez", async () => {
+    await calcularRutasAlternativas(trayecto);
+
+    expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(1);
+
+    expect(
+      obtenerGrafoPeatonal
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comuna: "ViÃ±a del Mar",
+        rangoHorario: "20:00 - 23:59",
+        soloSupabase: true,
+      })
+    );
+  });
+
+  test("cada perfil obtiene su Ã³ptimo independientemente del orden y de las rutas anteriores", async () => {
+    const grafo = crearGrafoTresAlternativas();
+    const grafoOriginal = structuredClone(grafo);
+    const perfiles = ["menor_riesgo", "equilibrada", "mas_rapida"];
+    const logOriginal = console.log;
+    console.log = () => {};
+    try {
+      const calcularEnOrden = async (orden) => {
+        const resultados = new Map();
+        for (const perfilRuta of orden) {
+          resultados.set(perfilRuta, await calcularRutaSegura({
+            ...trayecto,
+            perfilRuta,
+            grafoPrecalculado: grafo,
+            factorPenalizacion: 0,
+            usosSegmento: new Map(),
+          }));
+        }
+        return resultados;
+      };
+      const normal = await calcularEnOrden(perfiles);
+      const inverso = await calcularEnOrden([...perfiles].reverse());
+      for (const perfilRuta of perfiles) {
+        const esperado = normal.get(perfilRuta);
+        const inversoPerfil = inverso.get(perfilRuta);
+        expect(inversoPerfil.nodos_ruta).toEqual(esperado.nodos_ruta);
+        expect(inversoPerfil.distancia_metros).toBe(esperado.distancia_metros);
+        expect(inversoPerfil.puntaje_riesgo).toBe(esperado.puntaje_riesgo);
+        expect(inversoPerfil.costo_navegacion).toBe(esperado.costo_navegacion);
+      }
+
+      const alternativas = await calcularRutasAlternativas(trayecto);
+      expect(grafo).toEqual(grafoOriginal);
+      for (const ruta of alternativas.rutas) {
+        const optima = normal.get(ruta.perfil_ruta);
+        expect(ruta.nodos_ruta).toEqual(optima.nodos_ruta);
+        expect(ruta.distancia_metros).toBe(optima.distancia_metros);
+        expect(ruta.puntaje_riesgo).toBe(optima.puntaje_riesgo);
+        expect(ruta.costo_navegacion).toBe(optima.costo_navegacion);
+      }
+      expect(alternativas.rutas.find((ruta) => ruta.perfil_ruta === "mas_rapida").nodos_ruta)
+        .toEqual(normal.get("mas_rapida").nodos_ruta);
+    } finally {
+      console.log = logOriginal;
+    }
+  });
+
+  test("las rutas principales no heredan penalizaciÃ³n por segmentos usados", async () => {
+    const grafo = crearGrafoCalibracion();
+    const idsPorParNodos = new Map(grafo.aristas.map((arista) => [`${arista.nodo_origen}|${arista.nodo_destino}`, arista.id]));
+    obtenerGrafoPeatonal.mockResolvedValue(grafo);
+    const resultados = [];
+    const perfiles = ["menor_riesgo", "equilibrada", "mas_rapida"];
+    const referencias = new Map();
+    for (const perfilRuta of perfiles) {
+      referencias.set(perfilRuta, await calcularRutaSegura({
+        ...trayecto, perfilRuta, grafoPrecalculado: grafo,
+      }));
+    }
+
+    for (const factorPenalizacion of [0, 0.25, 0.5, 1]) {
+      const inicio = process.hrtime.bigint();
+      const resultado = await calcularRutasAlternativas({ ...trayecto, factorPenalizacion });
+      const tiempo_ms = Number(process.hrtime.bigint() - inicio) / 1e6;
+      const rutas = resultado.rutas.map((ruta) => {
+        const ids = ruta.nodos_ruta.slice(1).map((nodo, index) => {
+          const anterior = ruta.nodos_ruta[index];
+          return idsPorParNodos.get(`${anterior}|${nodo}`) || idsPorParNodos.get(`${nodo}|${anterior}`);
+        });
+        return {
+          perfil: ruta.perfil_ruta,
+          segmentos: ids,
+          distancia_m: ruta.distancia_metros,
+          riesgo: ruta.puntaje_riesgo,
+          costo_original: ruta.costo_navegacion,
+        };
+      });
+      for (const ruta of rutas) {
+        const referencia = referencias.get(ruta.perfil);
+        ruta.variacion_distancia_vs_base_m = Number((ruta.distancia_m - referencia.distancia_metros).toFixed(2));
+        ruta.variacion_riesgo_vs_base = Number((ruta.riesgo - referencia.puntaje_riesgo).toFixed(2));
+      }
+      const segmentos = rutas.map((ruta) => new Set(ruta.segmentos));
+      const paresCompartidos = [];
+      for (let i = 0; i < segmentos.length; i++) {
+        for (let j = i + 1; j < segmentos.length; j++) {
+          paresCompartidos.push([...segmentos[i]].filter((id) => segmentos[j].has(id)).length);
+        }
+      }
+      resultados.push({
+        factor: factorPenalizacion,
+        cantidad_rutas: resultado.cantidad_rutas,
+        segmentos_por_ruta: rutas.map((ruta) => ruta.segmentos),
+        intersecciones_por_par: paresCompartidos,
+        distancia_total_m: rutas.reduce((suma, ruta) => suma + ruta.distancia_m, 0),
+        distancia_por_ruta_m: rutas.map((ruta) => ruta.distancia_m),
+        riesgo_por_ruta: rutas.map((ruta) => ruta.riesgo),
+        variacion_distancia_por_perfil_m: rutas.map((ruta) => ruta.variacion_distancia_vs_base_m),
+        variacion_riesgo_por_perfil: rutas.map((ruta) => ruta.variacion_riesgo_vs_base),
+        costo_original_por_ruta: rutas.map((ruta) => ruta.costo_original),
+        tiempo_ms,
+      });
+    }
+
+    console.log("RESULTADOS_CALIBRACION_SEG174", JSON.stringify(resultados));
+    expect(resultados).toHaveLength(4);
+    expect(resultados.every((resultado) => resultado.cantidad_rutas > 0)).toBe(true);
+    const rutasBase = resultados[0].segmentos_por_ruta;
+    for (const resultado of resultados.slice(1)) {
+      expect(resultado.segmentos_por_ruta).toEqual(rutasBase);
+      expect(resultado.distancia_por_ruta_m).toEqual(resultados[0].distancia_por_ruta_m);
+      expect(resultado.riesgo_por_ruta).toEqual(resultados[0].riesgo_por_ruta);
+      expect(resultado.costo_original_por_ruta).toEqual(resultados[0].costo_original_por_ruta);
+    }
+  });
+
+  test("filtra alternativas de mÃ¡s de 90% de similitud si el riesgo difiere menos de 8 puntos", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoAltaSimilitud(54, 108));
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(1);
+    expect(resultado.rutas[0].perfil_ruta).toBe("menor_riesgo");
+  });
+
+  test("conserva alternativas similares si la diferencia de riesgo alcanza 8 puntos", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoAltaSimilitud(48, 110));
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(2);
+    expect(new Set(resultado.rutas.map((ruta) => ruta.puntaje_riesgo)).size).toBe(2);
+  });
+
+  test("caso A: descarta la ruta equilibrada del mismo corredor a 7.67 m y conserva menor riesgo", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoCasoACorredorCompartido());
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(1);
+    expect(resultado.rutas.map((ruta) => ruta.perfil_ruta)).toEqual(["menor_riesgo"]);
+    expect(resultado.rutas[0].distancia_metros).toBeCloseTo(1614.76, 1);
+    expect(resultado.rutas[0].puntaje_riesgo).toBeCloseTo(47, 1);
+  });
+
+  test("caso B: conserva tres alternativas con geometrÃ­as realmente distintas", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoCasoBAlternativasDistintas());
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(3);
+    expect(resultado.rutas.map((ruta) => ruta.perfil_ruta)).toEqual([
+      "menor_riesgo", "equilibrada", "mas_rapida",
+    ]);
+    expect(resultado.rutas.map((ruta) => ruta.distancia_metros)).toEqual([
+      1202.61, 1189.58, 1165.04,
+    ]);
+    expect(resultado.rutas.map((ruta) => ruta.puntaje_riesgo)).toEqual([
+      44.61, 45.68, 50.87,
+    ]);
+  });
+
+  test("no confunde la misma secuencia de nodos con segmentos paralelos distintos", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoParalelo());
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(2);
+    expect(resultado.rutas.map((ruta) => ruta.nodos_ruta)).toEqual([["O", "D"], ["O", "D"]]);
+  });
+
+  test("debe descartar alternativas con el mismo recorrido", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(
+      crearGrafoUnSoloRecorrido()
+    );
+
+    const resultado =
+      await calcularRutasAlternativas(trayecto);
+
+    expect(resultado.encontrada).toBe(true);
+    expect(resultado.cantidad_rutas).toBe(1);
+    expect(resultado.rutas).toHaveLength(1);
+
+    expect(resultado.mensaje).toContain(
+      "Solo fue posible generar 1 rutas peatonales diferentes"
+    );
+
+    expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(1);
+  });
+
+  test("debe informar cuando no existe conexiÃ³n entre origen y destino", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(
+      crearGrafoSinConexion()
+    );
+
+    const resultado =
+      await calcularRutasAlternativas(trayecto);
+
+    expect(resultado.encontrada).toBe(false);
+    expect(resultado.cantidad_rutas).toBe(0);
+    expect(resultado.rutas).toHaveLength(0);
+
+    expect(resultado.mensaje).toBe(
+      "No fue posible encontrar una ruta peatonal entre los puntos seleccionados."
+    );
+
+    expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(1);
+  });
+});

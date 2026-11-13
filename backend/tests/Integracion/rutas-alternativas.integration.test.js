@@ -267,8 +267,9 @@ const crearGrafoCalibracion = () => {
 const crearGrafoAltaSimilitud = (riesgoAlternativa, distanciaAlternativa) => ({
   nodos: [
     { id: "O", latitud: trayecto.origen.latitud, longitud: trayecto.origen.longitud },
-    { id: "A", latitud: -33.022, longitud: -71.549 },
-    { id: "B", latitud: -33.021, longitud: -71.548 },
+    // Ambos recorridos siguen el mismo eje; sus cortes OSM son distintos.
+    { id: "A", latitud: trayecto.origen.latitud + (trayecto.destino.latitud - trayecto.origen.latitud) * 0.4, longitud: trayecto.origen.longitud + (trayecto.destino.longitud - trayecto.origen.longitud) * 0.4 },
+    { id: "B", latitud: trayecto.origen.latitud + (trayecto.destino.latitud - trayecto.origen.latitud) * 0.6, longitud: trayecto.origen.longitud + (trayecto.destino.longitud - trayecto.origen.longitud) * 0.6 },
     { id: "D", latitud: trayecto.destino.latitud, longitud: trayecto.destino.longitud },
   ],
   aristas: [
@@ -289,6 +290,108 @@ const crearGrafoParalelo = () => ({
     { id: "riesgoso", id_osm: 2, nodo_origen: "O", nodo_destino: "D", distancia_metros: 80, puntaje_riesgo: 90, nombre: "Calle rápida", zonas_intersectadas: [] },
   ],
 });
+
+const crearProyeccionDelTrayecto = () => {
+  const latOrigen = trayecto.origen.latitud;
+  const lonOrigen = trayecto.origen.longitud;
+  const dx = (trayecto.destino.longitud - lonOrigen) * 111320 * Math.cos(latOrigen * Math.PI / 180);
+  const dy = (trayecto.destino.latitud - latOrigen) * 111320;
+  const longitud = Math.hypot(dx, dy);
+  const ux = dx / longitud;
+  const uy = dy / longitud;
+  const px = -uy;
+  const py = ux;
+  return (avance, desplazamiento = 0) => {
+    const x = ux * avance + px * desplazamiento;
+    const y = uy * avance + py * desplazamiento;
+    return {
+      latitud: latOrigen + y / 111320,
+      longitud: lonOrigen + x / (111320 * Math.cos(latOrigen * Math.PI / 180)),
+    };
+  };
+};
+
+const crearGrafoCasoACorredorCompartido = () => {
+  const punto = crearProyeccionDelTrayecto();
+
+  // Distancia geométrica real entre el origen y el destino.
+  // Debe coincidir con la longitud utilizada por la proyección.
+  const dx =
+    (trayecto.destino.longitud - trayecto.origen.longitud) *
+    111320 *
+    Math.cos(trayecto.origen.latitud * Math.PI / 180);
+
+  const dy =
+    (trayecto.destino.latitud - trayecto.origen.latitud) *
+    111320;
+
+  const longitud = Math.hypot(dx, dy);
+
+  const nodos = [
+    { id: "O", ...punto(0) },
+    { id: "D", ...punto(longitud) },
+    { id: "A0", ...punto(10) },
+    { id: "A1", ...punto(longitud - 10) },
+    { id: "B0", ...punto(10, 7.67) },
+    { id: "B1", ...punto(longitud - 10, 7.67) },
+  ];
+
+  const arista = (
+    id,
+    id_osm,
+    nodo_origen,
+    nodo_destino,
+    distancia_metros,
+    puntaje_riesgo
+  ) => ({
+    id,
+    id_osm,
+    nodo_origen,
+    nodo_destino,
+    distancia_metros,
+    puntaje_riesgo,
+    nombre: "Avenida del Corredor",
+    tipo: "primary",
+    sidewalk: null,
+    zonas_intersectadas: [],
+  });
+
+  return {
+    nodos,
+    aristas: [
+      arista("a-inicio", 1001, "O", "A0", 10, 47),
+      arista("a-corredor", 1001, "A0", "A1", 1594.76, 47),
+      arista("a-fin", 1001, "A1", "D", 10, 47),
+
+      arista("b-inicio", 2002, "O", "B0", 12.6, 48.57),
+      arista("b-corredor", 2002, "B0", "B1", 1562.32, 48.57),
+      arista("b-fin", 2002, "B1", "D", 12.6, 48.57),
+    ],
+  };
+};
+
+const crearGrafoCasoBAlternativasDistintas = () => {
+  const punto = crearProyeccionDelTrayecto();
+  const largo = Math.hypot(
+    (trayecto.destino.longitud - trayecto.origen.longitud) * 111320 * Math.cos(trayecto.origen.latitud * Math.PI / 180),
+    (trayecto.destino.latitud - trayecto.origen.latitud) * 111320,
+  );
+  const opciones = [
+    { perfil: "menor", nodo: "A", distancia: 1202.61, riesgo: 44.61, offset: 0, nombre: "Calle A" },
+    { perfil: "equilibrada", nodo: "B", distancia: 1189.58, riesgo: 45.68, offset: 300, nombre: "Calle B" },
+    { perfil: "rapida", nodo: "C", distancia: 1165.04, riesgo: 50.87, offset: -300, nombre: "Calle C" },
+  ];
+  const nodos = [{ id: "O", ...punto(0) }, { id: "D", ...punto(largo) }];
+  const aristas = [];
+  for (const opcion of opciones) {
+    nodos.push({ id: `${opcion.nodo}M`, ...punto(largo / 2, opcion.offset) });
+    aristas.push(
+      { id: `${opcion.nodo}1`, id_osm: `${opcion.nodo}-osm`, nodo_origen: "O", nodo_destino: `${opcion.nodo}M`, distancia_metros: opcion.distancia / 2, puntaje_riesgo: opcion.riesgo, nombre: opcion.nombre, tipo: "residential", zonas_intersectadas: [] },
+      { id: `${opcion.nodo}2`, id_osm: `${opcion.nodo}-osm`, nodo_origen: `${opcion.nodo}M`, nodo_destino: "D", distancia_metros: opcion.distancia / 2, puntaje_riesgo: opcion.riesgo, nombre: opcion.nombre, tipo: "residential", zonas_intersectadas: [] },
+    );
+  }
+  return { nodos, aristas };
+};
 
 describe("Generación de rutas alternativas", () => {
   beforeEach(() => {
@@ -346,7 +449,54 @@ describe("Generación de rutas alternativas", () => {
     );
   });
 
-  test("calibra factores 0, 0.25, 0.50 y 1 sobre el mismo grafo controlado", async () => {
+  test("cada perfil obtiene su óptimo independientemente del orden y de las rutas anteriores", async () => {
+    const grafo = crearGrafoTresAlternativas();
+    const grafoOriginal = structuredClone(grafo);
+    const perfiles = ["menor_riesgo", "equilibrada", "mas_rapida"];
+    const logOriginal = console.log;
+    console.log = () => {};
+    try {
+      const calcularEnOrden = async (orden) => {
+        const resultados = new Map();
+        for (const perfilRuta of orden) {
+          resultados.set(perfilRuta, await calcularRutaSegura({
+            ...trayecto,
+            perfilRuta,
+            grafoPrecalculado: grafo,
+            factorPenalizacion: 0,
+            usosSegmento: new Map(),
+          }));
+        }
+        return resultados;
+      };
+      const normal = await calcularEnOrden(perfiles);
+      const inverso = await calcularEnOrden([...perfiles].reverse());
+      for (const perfilRuta of perfiles) {
+        const esperado = normal.get(perfilRuta);
+        const inversoPerfil = inverso.get(perfilRuta);
+        expect(inversoPerfil.nodos_ruta).toEqual(esperado.nodos_ruta);
+        expect(inversoPerfil.distancia_metros).toBe(esperado.distancia_metros);
+        expect(inversoPerfil.puntaje_riesgo).toBe(esperado.puntaje_riesgo);
+        expect(inversoPerfil.costo_navegacion).toBe(esperado.costo_navegacion);
+      }
+
+      const alternativas = await calcularRutasAlternativas(trayecto);
+      expect(grafo).toEqual(grafoOriginal);
+      for (const ruta of alternativas.rutas) {
+        const optima = normal.get(ruta.perfil_ruta);
+        expect(ruta.nodos_ruta).toEqual(optima.nodos_ruta);
+        expect(ruta.distancia_metros).toBe(optima.distancia_metros);
+        expect(ruta.puntaje_riesgo).toBe(optima.puntaje_riesgo);
+        expect(ruta.costo_navegacion).toBe(optima.costo_navegacion);
+      }
+      expect(alternativas.rutas.find((ruta) => ruta.perfil_ruta === "mas_rapida").nodos_ruta)
+        .toEqual(normal.get("mas_rapida").nodos_ruta);
+    } finally {
+      console.log = logOriginal;
+    }
+  });
+
+  test("las rutas principales no heredan penalización por segmentos usados", async () => {
     const grafo = crearGrafoCalibracion();
     const idsPorParNodos = new Map(grafo.aristas.map((arista) => [`${arista.nodo_origen}|${arista.nodo_destino}`, arista.id]));
     obtenerGrafoPeatonal.mockResolvedValue(grafo);
@@ -406,6 +556,13 @@ describe("Generación de rutas alternativas", () => {
     console.log("RESULTADOS_CALIBRACION_SEG174", JSON.stringify(resultados));
     expect(resultados).toHaveLength(4);
     expect(resultados.every((resultado) => resultado.cantidad_rutas > 0)).toBe(true);
+    const rutasBase = resultados[0].segmentos_por_ruta;
+    for (const resultado of resultados.slice(1)) {
+      expect(resultado.segmentos_por_ruta).toEqual(rutasBase);
+      expect(resultado.distancia_por_ruta_m).toEqual(resultados[0].distancia_por_ruta_m);
+      expect(resultado.riesgo_por_ruta).toEqual(resultados[0].riesgo_por_ruta);
+      expect(resultado.costo_original_por_ruta).toEqual(resultados[0].costo_original_por_ruta);
+    }
   });
 
   test("filtra alternativas de más de 90% de similitud si el riesgo difiere menos de 8 puntos", async () => {
@@ -420,6 +577,30 @@ describe("Generación de rutas alternativas", () => {
     const resultado = await calcularRutasAlternativas(trayecto);
     expect(resultado.cantidad_rutas).toBe(2);
     expect(new Set(resultado.rutas.map((ruta) => ruta.puntaje_riesgo)).size).toBe(2);
+  });
+
+  test("caso A: descarta la ruta equilibrada del mismo corredor a 7.67 m y conserva menor riesgo", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoCasoACorredorCompartido());
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(1);
+    expect(resultado.rutas.map((ruta) => ruta.perfil_ruta)).toEqual(["menor_riesgo"]);
+    expect(resultado.rutas[0].distancia_metros).toBeCloseTo(1614.76, 1);
+    expect(resultado.rutas[0].puntaje_riesgo).toBeCloseTo(47, 1);
+  });
+
+  test("caso B: conserva tres alternativas con geometrías realmente distintas", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoCasoBAlternativasDistintas());
+    const resultado = await calcularRutasAlternativas(trayecto);
+    expect(resultado.cantidad_rutas).toBe(3);
+    expect(resultado.rutas.map((ruta) => ruta.perfil_ruta)).toEqual([
+      "menor_riesgo", "equilibrada", "mas_rapida",
+    ]);
+    expect(resultado.rutas.map((ruta) => ruta.distancia_metros)).toEqual([
+      1202.61, 1189.58, 1165.04,
+    ]);
+    expect(resultado.rutas.map((ruta) => ruta.puntaje_riesgo)).toEqual([
+      44.61, 45.68, 50.87,
+    ]);
   });
 
   test("no confunde la misma secuencia de nodos con segmentos paralelos distintos", async () => {

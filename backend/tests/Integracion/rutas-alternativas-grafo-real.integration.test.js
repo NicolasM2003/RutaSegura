@@ -6,8 +6,8 @@ const { obtenerGrafoPeatonal } = require("../../src/services/grafo-peatonal.serv
 const { calcularRutaSegura, calcularRutasAlternativas } = require("../../src/services/ruta.service");
 const muestra = require("../fixtures/vina-calibracion-grafo.json");
 
-describe("calibración SEG-174 con grafo real fijado localmente", () => {
-  test("compara los cuatro factores sobre el mismo grafo, origen, destino y horario", async () => {
+describe("rutas alternativas con grafo real fijado localmente", () => {
+  test("comprueba que la penalización no sesga rutas principales sobre el mismo grafo", async () => {
     obtenerGrafoPeatonal.mockResolvedValue(muestra.grafo);
     const logOriginal = console.log;
     const diagnosticos = [];
@@ -106,12 +106,18 @@ describe("calibración SEG-174 con grafo real fijado localmente", () => {
       expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(4);
       expect(resultados).toHaveLength(4);
       expect(resultados.every((item) => item.rutas_disponibles > 0)).toBe(true);
+      for (const item of resultados.slice(1)) {
+        expect(item.rutas.map((ruta) => ruta.segmentos)).toEqual(resultados[0].rutas.map((ruta) => ruta.segmentos));
+        expect(item.rutas.map((ruta) => ruta.distancia_m)).toEqual(resultados[0].rutas.map((ruta) => ruta.distancia_m));
+        expect(item.rutas.map((ruta) => ruta.riesgo)).toEqual(resultados[0].rutas.map((ruta) => ruta.riesgo));
+        expect(item.rutas.map((ruta) => ruta.costo_original)).toEqual(resultados[0].rutas.map((ruta) => ruta.costo_original));
+      }
     } finally {
       console.log = logOriginal;
     }
   }, 120000);
 
-  test("usa 0.25 por defecto, acumula usos y mantiene disponibles los segmentos comunes", async () => {
+  test("mantiene métricas originales y no penaliza perfiles por segmentos usados antes", async () => {
     obtenerGrafoPeatonal.mockResolvedValue(muestra.grafo);
     const parametros = {
       comuna: muestra.comuna,
@@ -138,12 +144,10 @@ describe("calibración SEG-174 con grafo real fijado localmente", () => {
         };
       });
       expect(rutasSimplificadas(porDefecto)).toEqual(rutasSimplificadas(explicito));
-      expect(porDefecto.cantidad_rutas).toBe(3);
-      expect(base.cantidad_rutas).toBe(2);
+      expect(rutasSimplificadas(porDefecto)).toEqual(rutasSimplificadas(base));
+      expect(porDefecto.cantidad_rutas).toBeGreaterThan(0);
+      expect(porDefecto.cantidad_rutas).toBeLessThanOrEqual(3);
 
-      const ids = rutasSimplificadas(porDefecto).map((ruta) => new Set(ruta.ids));
-      const comunesATodas = [...ids[0]].filter((id) => ids[1].has(id) && ids[2].has(id));
-      expect(comunesATodas.length).toBeGreaterThan(0);
       for (const ruta of rutasSimplificadas(porDefecto)) {
         const tolerancia = 1e-9 * Math.max(1, Math.abs(ruta.costo));
         expect(Math.abs(ruta.sumaCostosOriginales - ruta.costo)).toBeLessThanOrEqual(tolerancia);

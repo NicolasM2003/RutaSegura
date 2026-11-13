@@ -11,8 +11,16 @@ const {
   PESO_RIESGO,
 } = require("./costo-ruta.service");
 
+const {
+  proyectarPuntoSobreSegmento,
+  obtenerAristaMasCercanaEnGrafo,
+  integrarProyeccionesEnGrafo,
+  crearSegmentoConexion,
+} = require("../utils/proyeccion-punto-segmento");
+
 const METROS_POR_GRADO_LATITUD = 111_320;
 const IDS_SEGMENTOS_RUTA = Symbol("idsSegmentosRuta");
+const METADATOS_SEGMENTOS_RUTA = Symbol("metadatosSegmentosRuta");
 const IDS_LEGACY_ARISTAS = new WeakMap();
 let siguienteIdLegacy = 0;
 const obtenerIdSegmento = (arista) => {
@@ -26,10 +34,6 @@ const obtenerIdSegmento = (arista) => {
 // Velocidad peatonal inicial para estimar el tiempo de recorrido.
 // Valor provisional: 1,2 metros por segundo.
 const VELOCIDAD_PEATONAL_METROS_SEGUNDO = 1.2;
-
-// Factor inicial de producción aprobado para la diversificación acumulativa.
-// Las pruebas internas pueden pasar un factor experimental distinto.
-const FACTOR_PENALIZACION_RUTAS = 0.25;
 
 const MARGEN_BBOX_RUTA_METROS = (() => {
   const configurado = Number(process.env.RUTA_BBOX_MARGEN_METROS);
@@ -255,6 +259,134 @@ const obtenerNodoMasCercanoEnGrafo = (
     distancia_metros: Number(
       distanciaMinima.toFixed(2)
     ),
+  };
+};
+
+const prepararGrafoConProyeccionesRuta = (
+  grafo,
+  latOrigen,
+  lonOrigen,
+  latDestino,
+  lonDestino
+) => {
+  const origenProyectado = obtenerAristaMasCercanaEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    latOrigen,
+    lonOrigen
+  );
+
+  const destinoProyectado = obtenerAristaMasCercanaEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    latDestino,
+    lonDestino
+  );
+
+  // Validamos ambas proyecciones antes de acceder a sus propiedades.
+  // Así evitamos un TypeError y entregamos un error controlado si no hay
+  // una arista peatonal disponible cerca de alguno de los puntos.
+  if (!origenProyectado || !destinoProyectado) {
+    throw new Error(
+      "No fue posible conectar el origen o destino con una arista peatonal."
+    );
+  }
+
+  const nodoDestinoMasCercano = obtenerNodoMasCercanoEnGrafo(
+    grafo.nodos,
+    latDestino,
+    lonDestino
+  );
+
+  console.log("RUTA - Diagnóstico de proyección destino:", {
+    coordenadaSeleccionada: {
+      latitud: latDestino,
+      longitud: lonDestino,
+    },
+    aristaSeleccionada: {
+      id: destinoProyectado.arista.id,
+      id_osm: destinoProyectado.arista.id_osm,
+      nodo_origen: destinoProyectado.arista.nodo_origen,
+      nodo_destino: destinoProyectado.arista.nodo_destino,
+    },
+    coordenadasArista: {
+      origen: destinoProyectado.nodo_origen,
+      destino: destinoProyectado.nodo_destino,
+    },
+    fraccion: destinoProyectado.fraccion,
+    puntoProyectado: destinoProyectado.punto,
+    distanciaProyeccion:
+      destinoProyectado.distancia_proyeccion_metros,
+    nodoMasCercano: {
+      id: nodoDestinoMasCercano.nodo.id,
+      latitud: nodoDestinoMasCercano.nodo.latitud,
+      longitud: nodoDestinoMasCercano.nodo.longitud,
+      distancia: nodoDestinoMasCercano.distancia_metros,
+    },
+  });
+
+  const grafoIntegrado = integrarProyeccionesEnGrafo(
+    grafo.nodos,
+    grafo.aristas,
+    [
+      {
+        id: "origen",
+        arista: origenProyectado.arista,
+        fraccion: origenProyectado.fraccion,
+        punto: origenProyectado.punto,
+      },
+      {
+        id: "destino",
+        arista: destinoProyectado.arista,
+        fraccion: destinoProyectado.fraccion,
+        punto: destinoProyectado.punto,
+      },
+    ]
+  );
+
+  if (!grafoIntegrado) {
+    throw new Error(
+      "No fue posible integrar las proyecciones al grafo peatonal."
+    );
+  }
+
+  const nodosMap = new Map(
+    grafoIntegrado.nodos.map((nodo) => [nodo.id, nodo])
+  );
+
+  const obtenerConexion = (id, proyeccion) => {
+    const idNodo = grafoIntegrado.nodos_por_proyeccion[id];
+    const nodo = nodosMap.get(idNodo);
+
+    if (!nodo) {
+      throw new Error(
+        `No se encontró el nodo virtual correspondiente a ${id}.`
+      );
+    }
+
+    return {
+      nodo,
+      arista: proyeccion.arista,
+      distancia_metros: proyeccion.distancia_proyeccion_metros,
+      punto_proyectado: proyeccion.punto,
+    };
+  };
+
+  return {
+    grafo: {
+      ...grafo,
+      ...grafoIntegrado,
+      resumen: grafo.resumen
+        ? {
+            ...grafo.resumen,
+            cantidad_nodos: grafoIntegrado.nodos.length,
+            cantidad_aristas: grafoIntegrado.aristas.length,
+          }
+        : grafo.resumen,
+    },
+
+    origen: obtenerConexion("origen", origenProyectado),
+    destino: obtenerConexion("destino", destinoProyectado),
   };
 };
 
@@ -572,7 +704,7 @@ const calcularResumenRuta = ({
     distanciaTotal > 0
       ? riesgoPonderado / distanciaTotal
       : 0;
-  
+
   const tiempoEstimadoSegundos =
   distanciaTotal /
   VELOCIDAD_PEATONAL_METROS_SEGUNDO;
@@ -641,6 +773,7 @@ const calcularRutaSegura = async ({
   rangoHorario,
   perfilRuta = null,
   grafoPrecalculado = null,
+  conexionesProyectadas = null,
   factorPenalizacion = 0,
   usosSegmento = new Map(),
 }) => {
@@ -701,19 +834,47 @@ const calcularRutaSegura = async ({
       })
   );
 
-  const origenCercano =
-    obtenerNodoMasCercanoEnGrafo(
-      grafo.nodos,
-      latOrigen,
-      lonOrigen
+  const obtenerNodoTerminal = (
+    conexionProyectada,
+    latitud,
+    longitud
+  ) => {
+    if (!conexionProyectada?.nodo?.id) {
+      return obtenerNodoMasCercanoEnGrafo(
+        grafo.nodos,
+        latitud,
+        longitud
+      );
+    }
+
+    const nodo = grafo.nodos.find(
+      (elemento) => elemento.id === conexionProyectada.nodo.id
     );
 
-  const destinoCercano =
-    obtenerNodoMasCercanoEnGrafo(
-      grafo.nodos,
-      latDestino,
-      lonDestino
-    );
+    if (!nodo) {
+      throw new Error(
+        "El nodo proyectado no existe en el grafo."
+      );
+    }
+
+    return {
+      nodo,
+      distancia_metros:
+        Number(conexionProyectada.distancia_metros) || 0,
+    };
+  };
+
+  const origenCercano = obtenerNodoTerminal(
+    conexionesProyectadas?.origen,
+    latOrigen,
+    lonOrigen
+  );
+
+  const destinoCercano = obtenerNodoTerminal(
+    conexionesProyectadas?.destino,
+    latDestino,
+    lonDestino
+  );
 
   console.log(
     `RUTA - Nodo origen: ${origenCercano.nodo.id} (${origenCercano.distancia_metros} m)`
@@ -754,20 +915,124 @@ const calcularRutaSegura = async ({
     };
   }
 
+  const construirConectorRuta = (
+    id,
+    conexion,
+    coordenadaSeleccionada,
+    invertirSentido = false
+  ) => {
+    if (!conexion) return null;
+
+    const distancia = Number(conexion.distancia_metros) || 0;
+
+    if (distancia <= 0) return null;
+
+    const conector = crearSegmentoConexion({
+      id,
+      coordenadaSeleccionada,
+      puntoProyectado: conexion.punto_proyectado,
+      distanciaMetros: distancia,
+      aristaReferencia: conexion.arista,
+    });
+
+    if (!conector) {
+      throw new Error(
+        `No fue posible construir el conector de ${id}.`
+      );
+    }
+
+    if (invertirSentido) {
+      return {
+        ...conector,
+        inicio: conector.fin,
+        fin: conector.inicio,
+      };
+    }
+
+    return conector;
+  };
+
+  const conectorOrigen = construirConectorRuta(
+    "origen",
+    conexionesProyectadas?.origen,
+    {
+      latitud: latOrigen,
+      longitud: lonOrigen,
+    }
+  );
+
+  const conectorDestino = construirConectorRuta(
+    "destino",
+    conexionesProyectadas?.destino,
+    {
+      latitud: latDestino,
+      longitud: lonDestino,
+    },
+    true
+  );
+
+  const aristasParaResumen = [
+    ...(conectorOrigen ? [conectorOrigen] : []),
+    ...resultadoDijkstra.aristasRuta,
+    ...(conectorDestino ? [conectorDestino] : []),
+  ];
+
+  const distanciaRed = resultadoDijkstra.aristasRuta.reduce(
+    (total, arista) =>
+      total + (Number(arista.distancia_metros) || 0),
+    0
+  );
+
+  console.log("RUTA - Diagnóstico de distancia:", {
+    conectorOrigen: conectorOrigen?.distancia_metros ?? 0,
+    conectorDestino: conectorDestino?.distancia_metros ?? 0,
+    distanciaRed: Number(distanciaRed.toFixed(2)),
+    distanciaTotal: Number(
+      aristasParaResumen.reduce(
+        (total, arista) =>
+          total + (Number(arista.distancia_metros) || 0),
+        0
+      ).toFixed(2)
+    ),
+  });
+
   const nodosMap = new Map(
     grafo.nodos.map((nodo) => [nodo.id, nodo])
   );
 
   const resumen = calcularResumenRuta({
-    aristasRuta: resultadoDijkstra.aristasRuta,
-    costoTotal: resultadoDijkstra.aristasRuta.reduce(
-      (total, arista) => total + calcularCostoArista(arista, perfil), 0
+    aristasRuta: aristasParaResumen,
+    costoTotal: aristasParaResumen.reduce(
+      (total, arista) =>
+        total + calcularCostoArista(arista, perfil),
+      0
     ),
   });
 
-  resumen.geometria = construirGeometriaRuta(
+  const geometriaRed = construirGeometriaRuta(
     nodosMap,
     resultadoDijkstra.nodosRuta
+  );
+
+  const geometriaCompleta = [
+    [latOrigen, lonOrigen],
+    ...geometriaRed,
+    [latDestino, lonDestino],
+  ];
+
+  resumen.geometria = geometriaCompleta.filter(
+    (coordenada, indice, arreglo) => {
+      if (indice === 0) return true;
+
+      const anterior = arreglo[indice - 1];
+
+      return distanciaHaversine(
+        anterior[0],
+        anterior[1],
+        coordenada[0],
+        coordenada[1]
+      ) > 0.01;
+    }
   );
 
   console.log(
@@ -820,14 +1085,63 @@ const calcularRutaSegura = async ({
 
     nodos_ruta: resultadoDijkstra.nodosRuta,
     [IDS_SEGMENTOS_RUTA]: resultadoDijkstra.aristasRuta.map(obtenerIdSegmento),
+    // Metadatos internos para comparar corredores. Los Symbols no forman
+    // parte del JSON público ni alteran el contrato HTTP.
+    [METADATOS_SEGMENTOS_RUTA]: resultadoDijkstra.aristasRuta.map((arista) => {
+      const nodoOrigen = nodosMap.get(arista.nodo_origen);
+      const nodoDestino = nodosMap.get(arista.nodo_destino);
+      return {
+        id: obtenerIdSegmento(arista),
+        id_osm: arista.id_osm,
+        nodo_origen: arista.nodo_origen,
+        nodo_destino: arista.nodo_destino,
+        distancia_metros: Number(arista.distancia_metros),
+        nombre: arista.nombre,
+        tipo: arista.tipo,
+        categoria_peatonal: arista.categoria_peatonal,
+        superficie: arista.superficie,
+        acceso_peatonal: arista.acceso_peatonal,
+        sidewalk: arista.sidewalk,
+        footway: arista.footway,
+        crossing: arista.crossing,
+        inicio: nodoOrigen && [Number(nodoOrigen.longitud), Number(nodoOrigen.latitud)],
+        fin: nodoDestino && [Number(nodoDestino.longitud), Number(nodoDestino.latitud)],
+      };
+    }),
 
     segmentos: (() => {
       let costoAcumulado = 0;
-      return resultadoDijkstra.aristasRuta.map(
+
+      return aristasParaResumen.map(
         (arista) => {
           const costoSegmento = calcularCostoArista(arista, perfil);
           costoAcumulado += costoSegmento;
+
           return {
+            id: obtenerIdSegmento(arista),
+
+            es_conector: arista.es_conector === true,
+            riesgo_estimado: arista.riesgo_estimado === true,
+            arista_referencia_id: arista.arista_referencia_id ?? null,
+
+            inicio: arista.inicio ?? (
+              nodosMap.get(arista.nodo_origen)
+                ? [
+                    Number(nodosMap.get(arista.nodo_origen).latitud),
+                    Number(nodosMap.get(arista.nodo_origen).longitud),
+                  ]
+                : null
+            ),
+
+            fin: arista.fin ?? (
+              nodosMap.get(arista.nodo_destino)
+                ? [
+                    Number(nodosMap.get(arista.nodo_destino).latitud),
+                    Number(nodosMap.get(arista.nodo_destino).longitud),
+                  ]
+                : null
+            ),
+
             id_osm: arista.id_osm,
 
             nodo_origen: arista.nodo_origen,
@@ -874,6 +1188,20 @@ const calcularRutaSegura = async ({
 const UMBRAL_SIMILITUD_CORREDOR = 0.90;
 const DIFERENCIA_RIESGO_RELEVANTE = 8;
 
+const FACTORES_PENALIZACION_RECUPERACION = [
+  0.25,
+  0.50,
+  0.75,
+];
+
+// Límites geométricos provisionales de esta implementación; sujetos a la
+// validación de frontend de SEG-175 y a la revisión de calibración.
+const ANGULO_MAXIMO_CORREDOR_GRADOS = 25;
+const SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS = 3;
+const SEPARACION_MAXIMA_VIA_CONTINUA_METROS = 8;
+const SEPARACION_MAXIMA_ACERAS_OPUESTAS_METROS = 12;
+const DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS = 5;
+
 /*
  * Normaliza el nombre de una calle para comparar variantes como:
  *
@@ -904,110 +1232,679 @@ const normalizarNombreVia = (nombre) => {
   return normalizado || null;
 };
 
-/*
- * Agrupa la distancia recorrida según la calle.
- *
- * Prioridad:
- * 1. Nombre normalizado de la calle.
- * 2. Identificador OSM, cuando el segmento no tiene nombre.
- */
-const obtenerHuellaCorredores = (ruta) => {
-  const segmentos = Array.isArray(ruta.segmentos)
-    ? ruta.segmentos
-    : [];
+const proyectarPuntoLocal = (punto, referencia) => {
+  const latitudMedia = ((punto[1] + referencia[1]) / 2) * Math.PI / 180;
+  return [
+    (punto[0] - referencia[0]) * METROS_POR_GRADO_LATITUD * Math.cos(latitudMedia),
+    (punto[1] - referencia[1]) * METROS_POR_GRADO_LATITUD,
+  ];
+};
 
-  const distanciasPorCorredor = new Map();
-
-  let distanciaSegmentos = 0;
-
-  for (const segmento of segmentos) {
-    const distancia = Number(segmento.distancia_metros);
-
-    if (!Number.isFinite(distancia) || distancia <= 0) {
-      continue;
-    }
-
-    distanciaSegmentos += distancia;
-
-    const nombreVia = normalizarNombreVia(segmento.nombre);
-
-    let claveCorredor = null;
-
-    if (nombreVia) {
-      claveCorredor = `via:${nombreVia}`;
-    } else if (segmento.id_osm != null) {
-      claveCorredor = `osm:${segmento.id_osm}`;
-    }
-
-    // Sin nombre ni identificador no podemos comparar
-    // de forma fiable este segmento por corredor.
-    if (!claveCorredor) {
-      continue;
-    }
-
-    const distanciaAnterior =
-      distanciasPorCorredor.get(claveCorredor) || 0;
-
-    distanciasPorCorredor.set(
-      claveCorredor,
-      distanciaAnterior + distancia
-    );
-  }
-
-  const distanciaInformada = Number(ruta.distancia_metros);
-
-  const distanciaTotal =
-    Number.isFinite(distanciaInformada) &&
-    distanciaInformada > 0
-      ? distanciaInformada
-      : distanciaSegmentos;
-
+/* Longitud longitudinal común entre dos aristas rectas, con orientación reversible. */
+const medirSolapamientoGeometrico = (a, b) => {
+  if (!a.inicio || !a.fin || !b.inicio || !b.fin) return null;
+  const origen = a.inicio;
+  const p1 = [0, 0];
+  const p2 = proyectarPuntoLocal(a.fin, origen);
+  const q1 = proyectarPuntoLocal(b.inicio, origen);
+  const q2 = proyectarPuntoLocal(b.fin, origen);
+  const ax = p2[0] - p1[0]; const ay = p2[1] - p1[1];
+  const bx = q2[0] - q1[0]; const by = q2[1] - q1[1];
+  const longitudA = Math.hypot(ax, ay); const longitudB = Math.hypot(bx, by);
+  if (longitudA < 0.5 || longitudB < 0.5) return null;
+  const coseno = Math.abs((ax * bx + ay * by) / (longitudA * longitudB));
+  const angulo = Math.acos(Math.min(1, coseno)) * 180 / Math.PI;
+  if (angulo > ANGULO_MAXIMO_CORREDOR_GRADOS) return null;
+  const ux = ax / longitudA; const uy = ay / longitudA;
+  const proyecciones = [
+    q1[0] * ux + q1[1] * uy,
+    q2[0] * ux + q2[1] * uy,
+  ];
+  const inicio = Math.max(0, Math.min(...proyecciones));
+  const fin = Math.min(longitudA, Math.max(...proyecciones));
+  const solapamiento = Math.max(0, fin - inicio);
+  if (solapamiento <= 0) return null;
+  // Separación perpendicular (no punto a segmento acotado), para que una
+  // subdivisión que sobrepasa longitudinalmente al otro tramo siga solapando.
+  const separaciones = [q1, q2].map((q) => Math.abs(q[0] * uy - q[1] * ux));
+  const separacion = (separaciones[0] + separaciones[1]) / 2;
+  // El solapamiento relativo se evalúa al unir intervalos de la ruta completa,
+  // no por arista: cortes OSM pequeños no deben romper una continuidad válida.
+  const ubx = bx / longitudB; const uby = by / longitudB;
+  const proyeccionesB = [p1, p2].map((p) => (p[0] - q1[0]) * ubx + (p[1] - q1[1]) * uby);
+  const inicioB = Math.max(0, Math.min(...proyeccionesB));
+  const finB = Math.min(longitudB, Math.max(...proyeccionesB));
   return {
-    distanciasPorCorredor,
-    distanciaTotal,
+    longitud: Math.min(solapamiento, longitudA, longitudB),
+    separacion,
+    inicio: inicio / longitudA,
+    fin: fin / longitudA,
+    inicioB: inicioB / longitudB,
+    finB: finB / longitudB,
   };
 };
 
-/*
- * Calcula cuánto comparten dos rutas según las calles utilizadas.
- *
- * El resultado va de 0 a 1:
- * 0 = no comparten corredores identificables.
- * 1 = comparten toda la distancia identificada.
- */
-const calcularSimilitudCorredor = (rutaA, rutaB) => {
-  const huellaA = obtenerHuellaCorredores(rutaA);
-  const huellaB = obtenerHuellaCorredores(rutaB);
+const esCrucePeatonal = (segmento) =>
+  segmento && (segmento.footway === "crossing" || segmento.crossing != null);
 
-  if (
-    huellaA.distanciaTotal <= 0 ||
-    huellaB.distanciaTotal <= 0 ||
-    huellaA.distanciasPorCorredor.size === 0 ||
-    huellaB.distanciasPorCorredor.size === 0
-  ) {
-    return 0;
+const distanciaPuntoAArista = (punto, arista) => {
+  if (!punto || !arista?.inicio || !arista?.fin) return Infinity;
+  const extremo = proyectarPuntoLocal(arista.fin, arista.inicio);
+  const objetivo = proyectarPuntoLocal(punto, arista.inicio);
+  const largo2 = extremo[0] ** 2 + extremo[1] ** 2;
+  if (largo2 === 0) return Math.hypot(objetivo[0], objetivo[1]);
+  const t = Math.max(0, Math.min(1, (objetivo[0] * extremo[0] + objetivo[1] * extremo[1]) / largo2));
+  return Math.hypot(objetivo[0] - t * extremo[0], objetivo[1] - t * extremo[1]);
+};
+
+const cruceConectaAristas = (cruces, a, b) => (cruces || []).some((cruce) => {
+  if (!cruce.inicio || !cruce.fin) return false;
+  const extremos = [cruce.inicio, cruce.fin];
+  const conectaEnSentidoDirecto =
+    distanciaPuntoAArista(extremos[0], a) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS &&
+    distanciaPuntoAArista(extremos[1], b) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS;
+  const conectaEnSentidoInverso =
+    distanciaPuntoAArista(extremos[1], a) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS &&
+    distanciaPuntoAArista(extremos[0], b) <= DISTANCIA_MAXIMA_EXTREMO_CRUCE_METROS;
+  return conectaEnSentidoDirecto || conectaEnSentidoInverso;
+});
+
+const obtenerSegmentosComparables = (ruta) => {
+  const segmentos = Array.isArray(
+    ruta?.[METADATOS_SEGMENTOS_RUTA]
+  )
+    ? ruta[METADATOS_SEGMENTOS_RUTA]
+    : (ruta?.segmentos || []).map((segmento) => ({
+        ...segmento,
+      }));
+
+  // Los conectores no representan calles de OpenStreetMap.
+  return segmentos.filter(
+    (segmento) => segmento?.es_conector !== true
+  );
+};
+
+const evaluarCoincidenciaCorredor = (a, b, crucesA = [], crucesB = []) => {
+  const distanciaA = Number(a.distancia_metros);
+  const distanciaB = Number(b.distancia_metros);
+  if (!(distanciaA > 0) || !(distanciaB > 0) || esCrucePeatonal(a) || esCrucePeatonal(b)) return null;
+
+  const nodosMismos = a.nodo_origen != null && a.nodo_destino != null &&
+    ((String(a.nodo_origen) === String(b.nodo_origen) && String(a.nodo_destino) === String(b.nodo_destino)) ||
+     (String(a.nodo_origen) === String(b.nodo_destino) && String(a.nodo_destino) === String(b.nodo_origen)));
+  const osmMismo = a.id_osm != null && String(a.id_osm) === String(b.id_osm);
+  if (osmMismo && nodosMismos) return {
+    longitud: Math.min(distanciaA, distanciaB), exacta: true,
+    inicio: 0, fin: 1, inicioB: 0, finB: 1,
+  };
+
+  const nombreA = normalizarNombreVia(a.nombre);
+  const nombreB = normalizarNombreVia(b.nombre);
+  const mismoNombre = Boolean(nombreA && nombreA === nombreB);
+  const mismoNodoExtremo = [a.nodo_origen, a.nodo_destino].some((nodo) =>
+    nodo != null && [b.nodo_origen, b.nodo_destino].some((otro) => String(nodo) === String(otro)));
+  const acerasOpuestas = ["left", "right"].includes(a.sidewalk) &&
+    ["left", "right"].includes(b.sidewalk) && a.sidewalk !== b.sidewalk;
+  const cruceConectado = cruceConectaAristas([...crucesA, ...crucesB], a, b);
+  const solapamiento = medirSolapamientoGeometrico(a, b);
+  if (!solapamiento) return null;
+
+  // Tolerancia amplia solo con evidencia semántica de aceras opuestas en la
+  // misma calle. Proximidad/paralelismo por sí solos nunca crean equivalencia.
+  if (mismoNombre && (acerasOpuestas || cruceConectado) && solapamiento.separacion <= SEPARACION_MAXIMA_ACERAS_OPUESTAS_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // En rutas distintas, OSM puede modelar una misma calle/acera con nodos y
+  // ways independientes. Nombre normalizado + orientación + solapamiento
+  // longitudinal local permiten reconocer el corredor aun sin nodos comunes.
+  // La suma posterior une intervalos y el filtro exige 90 % de la ruta mayor;
+  // una calle paralela con otro nombre no se fusiona por distancia solamente.
+  if (mismoNombre && solapamiento.separacion <= SEPARACION_MAXIMA_VIA_CONTINUA_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // Para nombres diferentes o ausentes exigimos una superposición casi física
+  // y continuidad topológica (un extremo común); evita unir calles cercanas.
+  if (solapamiento.separacion <= SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS && mismoNodoExtremo) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  // El mismo nombre puede respaldar una coincidencia casi física si también
+  // hay solapamiento longitudinal y orientación compatible.
+  if (mismoNombre && solapamiento.separacion <= SEPARACION_MAXIMA_COINCIDENCIA_FISICA_METROS) {
+    return { ...solapamiento, exacta: false, corredor: true };
+  }
+  return null;
+};
+
+const esSegmentoFootway = (segmento) =>
+  ["footway", "path"].includes(String(segmento.tipo || "").toLowerCase()) &&
+  !esCrucePeatonal(segmento);
+
+const esConectorTerminalCorto = (segmento) => {
+  if (!segmento || esCrucePeatonal(segmento)) return false;
+
+  const tipo = String(segmento.tipo || "").toLowerCase();
+  const distancia = Number(segmento.distancia_metros);
+
+  return (
+    ["residential", "unclassified", "service", "living_street"].includes(tipo) &&
+    Number.isFinite(distancia) &&
+    distancia > 0 &&
+    distancia <= 10
+  );
+};
+
+const esSubrutaFootway = (segmentos) => {
+  if (!Array.isArray(segmentos) || segmentos.length === 0) {
+    return false;
   }
 
-  let distanciaCompartida = 0;
+  const indicesNoFootway = segmentos
+    .map((segmento, indice) => ({
+      segmento,
+      indice,
+    }))
+    .filter(({ segmento }) => !esSegmentoFootway(segmento));
 
-  for (const [corredor, distanciaA] of
-    huellaA.distanciasPorCorredor) {
-    const distanciaB =
-      huellaB.distanciasPorCorredor.get(corredor) || 0;
+  // Una secuencia compuesta exclusivamente por footways es válida.
+  if (indicesNoFootway.length === 0) return true;
 
-    distanciaCompartida += Math.min(
-      distanciaA,
-      distanciaB
+  // Solo permitimos un conector corto en uno de los extremos.
+  if (indicesNoFootway.length !== 1) return false;
+
+  const { segmento, indice } = indicesNoFootway[0];
+
+  const esExtremo =
+    indice === 0 || indice === segmentos.length - 1;
+
+  return esExtremo && esConectorTerminalCorto(segmento);
+};
+
+const esSubrutaCalleNombrada = (segmentos) => {
+  if (!segmentos.length || segmentos.some(esCrucePeatonal)) return false;
+  if (segmentos.some(esSegmentoFootway)) return false;
+
+  const nombres = new Set(
+    segmentos
+      .map((segmento) => normalizarNombreVia(segmento.nombre))
+      .filter(Boolean)
+  );
+
+  return nombres.size === 1;
+};
+
+/*
+ * Reconstruye el sentido de recorrido usando los nodos de cada arista.
+ * Las coordenadas quedan ordenadas según el recorrido, aunque la arista
+ * original de OSM esté almacenada en sentido contrario.
+ */
+const obtenerRecorridosOrientados = (segmentos) => {
+  if (!Array.isArray(segmentos) || !segmentos.length) return [];
+
+  const primero = segmentos[0];
+  const posiblesInicios = [
+    primero.nodo_origen,
+    primero.nodo_destino,
+  ].filter((nodo) => nodo != null);
+
+  const recorridos = [];
+  const firmas = new Set();
+
+  for (const posibleInicio of posiblesInicios) {
+    let nodoActual = String(posibleInicio);
+    const nodos = [nodoActual];
+    const puntos = [];
+    const indices = [];
+    let valido = true;
+
+    for (let indice = 0; indice < segmentos.length; indice++) {
+      const segmento = segmentos[indice];
+
+      if (
+        segmento.nodo_origen == null ||
+        segmento.nodo_destino == null ||
+        !Array.isArray(segmento.inicio) ||
+        !Array.isArray(segmento.fin)
+      ) {
+        valido = false;
+        break;
+      }
+
+      const origen = String(segmento.nodo_origen);
+      const destino = String(segmento.nodo_destino);
+
+      let siguiente;
+      let puntoInicio;
+      let puntoFin;
+
+      if (origen === nodoActual) {
+        siguiente = destino;
+        puntoInicio = segmento.inicio;
+        puntoFin = segmento.fin;
+      } else if (destino === nodoActual) {
+        siguiente = origen;
+        puntoInicio = segmento.fin;
+        puntoFin = segmento.inicio;
+      } else {
+        valido = false;
+        break;
+      }
+
+      const coordenadasValidas = [puntoInicio, puntoFin].every(
+        (punto) =>
+          Number.isFinite(Number(punto[0])) &&
+          Number.isFinite(Number(punto[1]))
+      );
+
+      if (!coordenadasValidas) {
+        valido = false;
+        break;
+      }
+
+      if (indice === 0) {
+        puntos.push(puntoInicio);
+      }
+
+      puntos.push(puntoFin);
+      nodos.push(siguiente);
+      indices.push(indice);
+      nodoActual = siguiente;
+    }
+
+    if (!valido) continue;
+
+    const firma = nodos.join("->");
+    if (firmas.has(firma)) continue;
+
+    firmas.add(firma);
+    recorridos.push({ nodos, puntos, indices });
+  }
+
+  return recorridos;
+};
+
+const distanciaPuntoSegmentoLocal = (punto, inicio, fin) => {
+  const dx = fin[0] - inicio[0];
+  const dy = fin[1] - inicio[1];
+  const longitudCuadrada = dx * dx + dy * dy;
+
+  if (longitudCuadrada === 0) {
+    return Math.hypot(
+      punto[0] - inicio[0],
+      punto[1] - inicio[1]
     );
   }
 
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      (
+        (punto[0] - inicio[0]) * dx +
+        (punto[1] - inicio[1]) * dy
+      ) / longitudCuadrada
+    )
+  );
+
+  const proyeccionX = inicio[0] + t * dx;
+  const proyeccionY = inicio[1] + t * dy;
+
+  return Math.hypot(
+    punto[0] - proyeccionX,
+    punto[1] - proyeccionY
+  );
+};
+
+const distanciaPuntoPolilineaLocal = (punto, polilinea) => {
+  let minima = Infinity;
+
+  for (let indice = 0; indice < polilinea.length - 1; indice++) {
+    minima = Math.min(
+      minima,
+      distanciaPuntoSegmentoLocal(
+        punto,
+        polilinea[indice],
+        polilinea[indice + 1]
+      )
+    );
+  }
+
+  return minima;
+};
+
+/* Genera muestras cada 5 metros para comparar la geometría completa. */
+const muestrearPolilineaLocal = (polilinea) => {
+  const muestras = [];
+
+  for (let indice = 0; indice < polilinea.length - 1; indice++) {
+    const inicio = polilinea[indice];
+    const fin = polilinea[indice + 1];
+
+    const longitud = Math.hypot(
+      fin[0] - inicio[0],
+      fin[1] - inicio[1]
+    );
+
+    const pasos = Math.max(1, Math.ceil(longitud / 5));
+
+    for (let paso = 0; paso < pasos; paso++) {
+      const t = paso / pasos;
+
+      muestras.push([
+        inicio[0] + (fin[0] - inicio[0]) * t,
+        inicio[1] + (fin[1] - inicio[1]) * t,
+      ]);
+    }
+  }
+
+  muestras.push(polilinea[polilinea.length - 1]);
+  return muestras;
+};
+
+/*
+ * Mide la separación máxima aproximada entre dos polilíneas.
+ * Se revisan ambas direcciones para evitar que una ruta se aleje
+ * considerablemente aunque la otra permanezca cerca.
+ */
+const medirSeparacionMaximaPolilineas = (puntosA, puntosB) => {
+  if (puntosA.length < 2 || puntosB.length < 2) return Infinity;
+
+  const referencia = puntosA[0];
+
+  const polilineaA = puntosA.map((punto) =>
+    proyectarPuntoLocal(punto, referencia)
+  );
+
+  const polilineaB = puntosB.map((punto) =>
+    proyectarPuntoLocal(punto, referencia)
+  );
+
+  const muestrasA = muestrearPolilineaLocal(polilineaA);
+  const muestrasB = muestrearPolilineaLocal(polilineaB);
+
+  const maximaA = Math.max(
+    ...muestrasA.map((punto) =>
+      distanciaPuntoPolilineaLocal(punto, polilineaB)
+    )
+  );
+
+  const maximaB = Math.max(
+    ...muestrasB.map((punto) =>
+      distanciaPuntoPolilineaLocal(punto, polilineaA)
+    )
+  );
+
+  return Math.max(maximaA, maximaB);
+};
+
+/*
+ * Detecta subrutas que comparten nodos de inicio y fin, aunque una
+ * esté representada por una sola arista y la otra por varias.
+ *
+ * En esta primera versión, la equivalencia entre tipos distintos
+ * se limita al caso footway frente a calle nombrada.
+ */
+const obtenerCoincidenciasSubrutas = (segmentosA, segmentosB) => {
+  const recorridosA = obtenerRecorridosOrientados(segmentosA);
+  const recorridosB = obtenerRecorridosOrientados(segmentosB);
+
+  const coincidencias = [];
+  const firmas = new Set();
+
+  for (const recorridoA of recorridosA) {
+    for (const recorridoB of recorridosB) {
+      const nodosB = new Set(recorridoB.nodos);
+      const nodosComunes = new Set(
+        recorridoA.nodos.filter((nodo) => nodosB.has(nodo))
+      );
+
+      for (
+        let inicioA = 0;
+        inicioA < recorridoA.nodos.length - 1;
+        inicioA++
+      ) {
+        const nodoInicio = recorridoA.nodos[inicioA];
+
+        if (!nodosComunes.has(nodoInicio)) continue;
+
+        const inicioB = recorridoB.nodos.indexOf(nodoInicio);
+        if (inicioB < 0) continue;
+
+        for (
+          let finA = inicioA + 1;
+          finA < recorridoA.nodos.length;
+          finA++
+        ) {
+          const nodoFin = recorridoA.nodos[finA];
+
+          if (!nodosComunes.has(nodoFin)) continue;
+
+          const finB = recorridoB.nodos.indexOf(nodoFin);
+          if (finB <= inicioB) continue;
+
+          // Solo evaluamos tramos entre anclajes consecutivos compartidos.
+          const tieneAnclaIntermediaA = recorridoA.nodos
+            .slice(inicioA + 1, finA)
+            .some((nodo) => nodosComunes.has(nodo));
+
+          const tieneAnclaIntermediaB = recorridoB.nodos
+            .slice(inicioB + 1, finB)
+            .some((nodo) => nodosComunes.has(nodo));
+
+          if (tieneAnclaIntermediaA || tieneAnclaIntermediaB) continue;
+
+          const indicesA = recorridoA.indices.slice(inicioA, finA);
+          const indicesB = recorridoB.indices.slice(inicioB, finB);
+
+          const subrutaA = indicesA.map((indice) => segmentosA[indice]);
+          const subrutaB = indicesB.map((indice) => segmentosB[indice]);
+
+          const coincideFootwayYCalle =
+            (esSubrutaFootway(subrutaA) &&
+              esSubrutaCalleNombrada(subrutaB)) ||
+            (esSubrutaCalleNombrada(subrutaA) &&
+              esSubrutaFootway(subrutaB));
+
+          if (!coincideFootwayYCalle) continue;
+
+          const distanciaA = subrutaA.reduce(
+            (total, segmento) =>
+              total + (Number(segmento.distancia_metros) || 0),
+            0
+          );
+
+          const distanciaB = subrutaB.reduce(
+            (total, segmento) =>
+              total + (Number(segmento.distancia_metros) || 0),
+            0
+          );
+
+          if (!(distanciaA > 0) || !(distanciaB > 0)) continue;
+
+          const proporcionLongitudes =
+            Math.min(distanciaA, distanciaB) /
+            Math.max(distanciaA, distanciaB);
+
+          // Evita relacionar recorridos con longitudes demasiado diferentes.
+          if (proporcionLongitudes < 0.80) continue;
+
+          const puntosA = recorridoA.puntos.slice(inicioA, finA + 1);
+          const puntosB = recorridoB.puntos.slice(inicioB, finB + 1);
+
+          const separacion = medirSeparacionMaximaPolilineas(
+            puntosA,
+            puntosB
+          );
+
+          if (separacion > SEPARACION_MAXIMA_VIA_CONTINUA_METROS) {
+            continue;
+          }
+
+          const firma = `${indicesA.join(",")}|${indicesB.join(",")}`;
+          if (firmas.has(firma)) continue;
+
+          firmas.add(firma);
+          coincidencias.push({ indicesA, indicesB });
+        }
+      }
+    }
+  }
+
+  return coincidencias;
+};
+
+/* Suma coincidencias locales con presupuesto por arista para evitar doble conteo. */
+const calcularDistanciaCompartidaCorredor = (rutaA, rutaB) => {
+  const segmentosA = obtenerSegmentosComparables(rutaA);
+  const segmentosB = obtenerSegmentosComparables(rutaB);
+
+  const intervalosPorA = segmentosA.map(() => []);
+  const intervalosPorB = segmentosB.map(() => []);
+
+  // Primero registramos las coincidencias de subrutas completas.
+  const coincidenciasSubrutas = obtenerCoincidenciasSubrutas(
+    segmentosA,
+    segmentosB
+  );
+
+  for (const coincidencia of coincidenciasSubrutas) {
+    for (const indice of coincidencia.indicesA) {
+      const distancia =
+        Number(segmentosA[indice].distancia_metros) || 0;
+
+      if (distancia > 0) {
+        intervalosPorA[indice].push([0, distancia]);
+      }
+    }
+
+    for (const indice of coincidencia.indicesB) {
+      const distancia =
+        Number(segmentosB[indice].distancia_metros) || 0;
+
+      if (distancia > 0) {
+        intervalosPorB[indice].push([0, distancia]);
+      }
+    }
+  }
+
+  // Después conservamos la comparación individual que ya existía.
+  const cruces = [...segmentosA, ...segmentosB].filter(esCrucePeatonal);
+  const candidatos = [];
+
+  segmentosA.forEach((a, indiceA) =>
+    segmentosB.forEach((b, indiceB) => {
+      const coincidencia = evaluarCoincidenciaCorredor(
+        a,
+        b,
+        cruces,
+        cruces
+      );
+
+      if (coincidencia) {
+        candidatos.push({ indiceA, indiceB, ...coincidencia });
+      }
+    })
+  );
+
+  candidatos.sort(
+    (a, b) =>
+      Number(b.exacta) - Number(a.exacta) ||
+      b.longitud - a.longitud
+  );
+
+  for (const candidato of candidatos) {
+    const distanciaA =
+      Math.max(
+        0,
+        Number(segmentosA[candidato.indiceA].distancia_metros) || 0
+      );
+
+    const distanciaB =
+      Math.max(
+        0,
+        Number(segmentosB[candidato.indiceB].distancia_metros) || 0
+      );
+
+    if (distanciaA <= 0 || distanciaB <= 0) continue;
+
+    intervalosPorA[candidato.indiceA].push([
+      candidato.inicio * distanciaA,
+      candidato.fin * distanciaA,
+    ]);
+
+    intervalosPorB[candidato.indiceB].push([
+      candidato.inicioB * distanciaB,
+      candidato.finB * distanciaB,
+    ]);
+  }
+
+  const medirUnion = (intervalosPorSegmento, segmentos) =>
+    intervalosPorSegmento.reduce((total, intervalos, indice) => {
+      intervalos.sort((a, b) => a[0] - b[0]);
+
+      let inicio = null;
+      let fin = null;
+      let union = 0;
+
+      for (const intervalo of intervalos) {
+        if (inicio == null) {
+          [inicio, fin] = intervalo;
+          continue;
+        }
+
+        if (intervalo[0] <= fin) {
+          fin = Math.max(fin, intervalo[1]);
+        } else {
+          union += fin - inicio;
+          [inicio, fin] = intervalo;
+        }
+      }
+
+      if (inicio != null) union += fin - inicio;
+
+      return total + Math.min(
+        union,
+        Number(segmentos[indice].distancia_metros) || 0
+      );
+    }, 0);
+
+  return Math.min(
+    medirUnion(intervalosPorA, segmentosA),
+    medirUnion(intervalosPorB, segmentosB)
+  );
+};
+
+const calcularSimilitudCorredor = (rutaA, rutaB) => {
+  const segmentosA = obtenerSegmentosComparables(rutaA);
+  const segmentosB = obtenerSegmentosComparables(rutaB);
+
+  const distanciaA = segmentosA.reduce(
+    (total, segmento) =>
+      total + Math.max(
+        0,
+        Number(segmento.distancia_metros) || 0
+      ),
+    0
+  );
+
+  const distanciaB = segmentosB.reduce(
+    (total, segmento) =>
+      total + Math.max(
+        0,
+        Number(segmento.distancia_metros) || 0
+      ),
+    0
+  );
+
+  if (!(distanciaA > 0) || !(distanciaB > 0)) {
+    return 0;
+  }
+
+  const distanciaCompartida =
+    calcularDistanciaCompartidaCorredor(rutaA, rutaB);
+
   return Math.min(
     1,
-    distanciaCompartida /
-      Math.max(
-        huellaA.distanciaTotal,
-        huellaB.distanciaTotal
-      )
+    distanciaCompartida / Math.max(distanciaA, distanciaB)
   );
 };
 
@@ -1030,6 +1927,64 @@ const sonSegmentosIdenticos = (rutaA, rutaB) => {
     : "";
 
   return Boolean(nodosA && nodosA === nodosB);
+};
+
+/*
+ * Determina si una ruta es dominada por otra considerando
+ * distancia y riesgo.
+ *
+ * Una ruta está dominada cuando la otra es igual o mejor
+ * en ambos indicadores y estrictamente mejor en al menos uno.
+ */
+const esRutaDominadaPor = (ruta, rutaComparadora) => {
+  if (
+    !ruta ||
+    !rutaComparadora ||
+    ruta.distancia_metros == null ||
+    ruta.puntaje_riesgo == null ||
+    rutaComparadora.distancia_metros == null ||
+    rutaComparadora.puntaje_riesgo == null
+  ) {
+    return false;
+  }
+
+  const distancia = Number(ruta.distancia_metros);
+  const riesgo = Number(ruta.puntaje_riesgo);
+
+  const distanciaComparadora = Number(
+    rutaComparadora.distancia_metros
+  );
+
+  const riesgoComparadora = Number(
+    rutaComparadora.puntaje_riesgo
+  );
+
+  if (
+    !Number.isFinite(distancia) ||
+    !Number.isFinite(riesgo) ||
+    !Number.isFinite(distanciaComparadora) ||
+    !Number.isFinite(riesgoComparadora) ||
+    distancia <= 0 ||
+    distanciaComparadora <= 0
+  ) {
+    return false;
+  }
+
+  const noEsPeorEnDistancia =
+    distanciaComparadora <= distancia;
+
+  const noEsPeorEnRiesgo =
+    riesgoComparadora <= riesgo;
+
+  const esMejorEnAlgunIndicador =
+    distanciaComparadora < distancia ||
+    riesgoComparadora < riesgo;
+
+  return (
+    noEsPeorEnDistancia &&
+    noEsPeorEnRiesgo &&
+    esMejorEnAlgunIndicador
+  );
 };
 
 const sonRutasEquivalentes = (rutaA, rutaB) => {
@@ -1082,12 +2037,12 @@ const sonRutasEquivalentes = (rutaA, rutaB) => {
  * Si no hay tres recorridos diferentes, se devuelven
  * únicamente las alternativas disponibles.
  */
+
 const calcularRutasAlternativas = async ({
   comuna,
   origen,
   destino,
   rangoHorario,
-  factorPenalizacion = FACTOR_PENALIZACION_RUTAS,
 }) => {
   const {
     latOrigen,
@@ -1109,105 +2064,263 @@ const calcularRutasAlternativas = async ({
     longitud: lonDestino,
   };
 
-  const grafo = await obtenerGrafoRuta({
+const grafoOriginal = validarGrafoPeatonal(
+  await obtenerGrafoRuta({
     comuna,
     origen: origenNormalizado,
     destino: destinoNormalizado,
     rangoHorario,
-  });
+  })
+);
+
+const {
+  grafo,
+  origen: conexionOrigen,
+  destino: conexionDestino,
+} = prepararGrafoConProyeccionesRuta(
+  grafoOriginal,
+  latOrigen,
+  lonOrigen,
+  latDestino,
+  lonDestino
+);
+
+console.log(
+  `RUTA - Proyección origen: ${conexionOrigen.distancia_metros} m`
+);
+
+console.log(
+  `RUTA - Proyección destino: ${conexionDestino.distancia_metros} m`
+);
 
   const rutasUnicas = [];
-  const recorridosVistos = new Set();
-  const usosSegmento = new Map();
+  const perfilesPendientes = [];
 
+  const cantidadPerfiles = Object.keys(PERFILES_RUTA).length;
+
+  // Registra los segmentos que ya forman parte de corredores utilizados.
+  // Se usa una marca binaria para no penalizar varias veces los tramos
+  // compartidos por diferentes rutas.
+  const registrarSegmentosPenalizados = (usos, ruta) => {
+    const ids = ruta?.[IDS_SEGMENTOS_RUTA];
+
+    if (!Array.isArray(ids)) return;
+
+    for (const id of ids) {
+      usos.set(id, 1);
+    }
+  };
+
+  const obtenerMotivoRedundancia = (resultado) => {
+    const duplicadaExacta = rutasUnicas.some((ruta) =>
+      sonSegmentosIdenticos(ruta, resultado)
+    );
+
+    if (duplicadaExacta) {
+      return "secuencia de segmentos idéntica";
+    }
+
+    const similar = rutasUnicas.some((ruta) =>
+      sonRutasEquivalentes(ruta, resultado)
+    );
+
+    if (similar) {
+      return "similitud de corredores >= 90%";
+    }
+
+    return null;
+  };
+
+  const resultadoValido = (resultado) =>
+    resultado?.encontrada &&
+    Array.isArray(resultado.nodos_ruta);
+
+  // ETAPA 1: calcular los perfiles originales sin penalización.
   for (const perfilRuta of Object.keys(PERFILES_RUTA)) {
     const resultado = await calcularRutaSegura({
       comuna,
-
       origen: origenNormalizado,
       destino: destinoNormalizado,
-
       rangoHorario,
       perfilRuta,
-      factorPenalizacion,
-      usosSegmento,
-
+      factorPenalizacion: 0,
+      usosSegmento: new Map(),
       grafoPrecalculado: grafo,
+      conexionesProyectadas: {
+        origen: conexionOrigen,
+        destino: conexionDestino,
+      },
     });
 
-    if (
-      !resultado.encontrada ||
-      !Array.isArray(resultado.nodos_ruta)
-    ) {
-      console.log(`RUTA - Alternativa no disponible: ${perfilRuta} (sin conectividad)`);
+    if (!resultadoValido(resultado)) {
+      console.log(
+        `RUTA - Alternativa no disponible: ${perfilRuta}`
+      );
       continue;
     }
 
-    const identificadorRecorrido = Array.isArray(resultado[IDS_SEGMENTOS_RUTA])
-      ? resultado[IDS_SEGMENTOS_RUTA].join("->")
-      : resultado.nodos_ruta.join("->");
+    const motivo = obtenerMotivoRedundancia(resultado);
 
-    const duplicadaExacta = rutasUnicas.some((rutaExistente) =>
-      sonSegmentosIdenticos(rutaExistente, resultado)
-    );
-    const similarAExistente = !duplicadaExacta && rutasUnicas.some((rutaExistente) =>
-      sonRutasEquivalentes(rutaExistente, resultado)
-    );
-
-    if (
-      recorridosVistos.has(identificadorRecorrido) ||
-      duplicadaExacta ||
-      similarAExistente
-    ) {
+    if (motivo) {
       console.log(
-        `RUTA - Alternativa descartada: ${perfilRuta} (${duplicadaExacta || recorridosVistos.has(identificadorRecorrido) ? "secuencia de segmentos idéntica" : "similitud de corredores >= 90% sin diferencia de riesgo >= 8"})`
+        `RUTA - Alternativa descartada: ${perfilRuta} (${motivo})`
       );
 
+      // Guardamos el perfil para intentar encontrarle
+      // un recorrido diferente en la segunda etapa.
+      perfilesPendientes.push({
+        perfilRuta,
+        rutaBase: resultado,
+      });
+
       continue;
     }
 
-    recorridosVistos.add(
-      identificadorRecorrido
-    );
-
     rutasUnicas.push(resultado);
-    for (const idSegmento of resultado[IDS_SEGMENTOS_RUTA] || []) {
-      if (idSegmento != null) {
-        usosSegmento.set(idSegmento, (usosSegmento.get(idSegmento) || 0) + 1);
+  }
+
+  // ETAPA 2: buscar reemplazos para los perfiles descartados.
+  for (const { perfilRuta, rutaBase } of perfilesPendientes) {
+    if (rutasUnicas.length >= cantidadPerfiles) break;
+
+    const usosSegmento = new Map();
+
+    // Penalizamos las rutas que ya fueron aceptadas.
+    for (const ruta of rutasUnicas) {
+      registrarSegmentosPenalizados(usosSegmento, ruta);
+    }
+
+    // También penalizamos el recorrido óptimo descartado
+    // para intentar explorar un corredor diferente.
+    registrarSegmentosPenalizados(usosSegmento, rutaBase);
+
+    let recuperada = false;
+
+    for (const factorPenalizacion of FACTORES_PENALIZACION_RECUPERACION) {
+      const resultado = await calcularRutaSegura({
+        comuna,
+        origen: origenNormalizado,
+        destino: destinoNormalizado,
+        rangoHorario,
+        perfilRuta,
+        factorPenalizacion,
+        usosSegmento,
+        grafoPrecalculado: grafo,
+        conexionesProyectadas: {
+          origen: conexionOrigen,
+          destino: conexionDestino,
+        },
+      });
+
+      if (!resultadoValido(resultado)) {
+        console.log(
+          `RUTA - Reintento sin recorrido: ${perfilRuta} (factor ${factorPenalizacion})`
+        );
+        continue;
       }
+
+      const motivo = obtenerMotivoRedundancia(resultado);
+
+      if (!motivo) {
+        // Antes de aceptar el candidato, comprobar si alguna ruta
+        // existente ya es igual o mejor en distancia y riesgo.
+        const rutaDominante = rutasUnicas.find(
+          (rutaExistente) =>
+            esRutaDominadaPor(resultado, rutaExistente)
+        );
+
+        if (rutaDominante) {
+          console.log(
+            `RUTA - Candidato recuperado dominado: ${perfilRuta} ` +
+            `(dominado por ${rutaDominante.perfil_ruta || "otra ruta"}, ` +
+            `factor ${factorPenalizacion})`
+          );
+
+          // Evitamos volver a encontrar el mismo recorrido
+          // en el siguiente intento.
+          registrarSegmentosPenalizados(usosSegmento, resultado);
+
+          // Continuamos con el siguiente factor de penalización.
+          continue;
+        }
+
+        // El candidato no es redundante ni está dominado.
+        resultado.es_alternativa_diversificada = true;
+
+        rutasUnicas.push(resultado);
+
+        console.log(
+          `RUTA - Alternativa recuperada: ${perfilRuta} (factor ${factorPenalizacion})`
+        );
+
+        recuperada = true;
+        break;
+      }
+
+      console.log(
+        `RUTA - Candidato diversificado descartado: ${perfilRuta} (${motivo}, factor ${factorPenalizacion})`
+      );
+
+      // El siguiente intento también evitará los segmentos
+      // utilizados por este candidato redundante.
+      registrarSegmentosPenalizados(usosSegmento, resultado);
+    }
+
+    if (!recuperada) {
+      console.log(
+        `RUTA - No se encontró reemplazo diferente para: ${perfilRuta}`
+      );
     }
   }
 
-  const cantidadPerfiles =
-    Object.keys(PERFILES_RUTA).length;
+// ETAPA 3: eliminar rutas dominadas por otra alternativa.
+// Se conservan las rutas que ofrecen una ventaja en distancia
+// o en riesgo frente a las demás.
+const rutasNoDominadas = rutasUnicas.filter((ruta, indice) => {
+  const rutaDominante = rutasUnicas.find(
+    (otraRuta, otroIndice) =>
+      otroIndice !== indice &&
+      esRutaDominadaPor(ruta, otraRuta)
+  );
+
+  if (rutaDominante) {
+    console.log(
+      `RUTA - Alternativa dominada descartada: ${ruta.perfil_ruta}`
+    );
+  }
+
+  return !rutaDominante;
+});
 
   let mensaje = null;
 
-  if (rutasUnicas.length === 0) {
-    mensaje =
-      "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.";
-  } else if (rutasUnicas.length < cantidadPerfiles) {
-    mensaje =
-      `Solo fue posible generar ${rutasUnicas.length} rutas peatonales diferentes de ${cantidadPerfiles} posibles.`;
-  }
+if (rutasNoDominadas.length === 0) {
+  mensaje =
+    "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.";
+} else if (rutasNoDominadas.length < cantidadPerfiles) {
+  mensaje =
+    `Solo fue posible generar ${rutasNoDominadas.length} rutas peatonales diferentes de ${cantidadPerfiles} posibles.`;
+}
 
-  console.log(
-    `RUTA - Alternativas diferentes: ${rutasUnicas.length}/${cantidadPerfiles}`
-  );
+console.log(
+  `RUTA - Alternativas diferentes: ${rutasNoDominadas.length}/${cantidadPerfiles}`
+);
 
-  return {
-    encontrada: rutasUnicas.length > 0,
-
-    cantidad_rutas: rutasUnicas.length,
-
-    rutas: rutasUnicas,
-
-    ...(mensaje ? { mensaje } : {}),
-  };
+return {
+  encontrada: rutasNoDominadas.length > 0,
+  cantidad_rutas: rutasNoDominadas.length,
+  rutas: rutasNoDominadas,
+  ...(mensaje ? { mensaje } : {}),
 };
+};
+
 
 module.exports = {
   calcularRutaSegura,
   calcularRutasAlternativas,
   construirBboxRuta,
+  calcularSimilitudCorredor,
+  calcularDistanciaCompartidaCorredor,
+  esRutaDominadaPor,
+  proyectarPuntoSobreSegmento,
 };
