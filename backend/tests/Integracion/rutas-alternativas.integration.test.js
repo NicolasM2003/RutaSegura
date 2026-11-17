@@ -39,23 +39,23 @@ const crearGrafoTresAlternativas = () => ({
     },
     {
       id: "A",
-      latitud: -33.022,
-      longitud: -71.549,
+      latitud: -33.024,
+      longitud: -71.5505,
     },
     {
       id: "B",
-      latitud: -33.021,
-      longitud: -71.548,
+      latitud: -33.0238,
+      longitud: -71.5505,
     },
     {
       id: "C",
-      latitud: -33.020,
-      longitud: -71.547,
+      latitud: -33.0244,
+      longitud: -71.5505,
     },
     {
       id: "D",
-      latitud: -33.015,
-      longitud: -71.535,
+      latitud: -33.024,
+      longitud: -71.550,
     },
   ],
 
@@ -187,6 +187,27 @@ const crearGrafoUnSoloRecorrido = () => ({
   ],
 });
 
+const crearGrafoDosRecorridosMismoCosto = () => ({
+  nodos: [
+    { id: "O", latitud: -33.024, longitud: -71.551 },
+    { id: "A", latitud: -33.024, longitud: -71.5505 },
+    { id: "B", latitud: -33.0239, longitud: -71.5505 },
+    { id: "D", latitud: -33.024, longitud: -71.550 },
+  ],
+  aristas: [
+    ["O", "A", 501], ["A", "D", 502],
+    ["O", "B", 503], ["B", "D", 504],
+  ].map(([nodo_origen, nodo_destino, id_osm]) => ({
+    id_osm,
+    nodo_origen,
+    nodo_destino,
+    distancia_metros: 60,
+    puntaje_riesgo: 0,
+    nivel_riesgo: "Bajo",
+    zonas_intersectadas: [],
+  })),
+});
+
 const crearGrafoSinConexion = () => ({
   nodos: [
     {
@@ -295,6 +316,23 @@ describe("Generación de rutas alternativas", () => {
     );
   });
 
+  test("pone primero el perfil solicitado y usa Yen solo ante rutas redundantes", async () => {
+    obtenerGrafoPeatonal.mockResolvedValue(crearGrafoDosRecorridosMismoCosto());
+
+    const resultado = await calcularRutasAlternativas({
+      ...trayecto,
+      perfilRuta: "equilibrada",
+    });
+
+    expect(resultado.perfil_principal).toBe("equilibrada");
+    expect(resultado.rutas[0].perfil_ruta).toBe("equilibrada");
+    expect(resultado.rutas[0].es_ruta_principal).toBe(true);
+    expect(resultado.generacion.yen.activaciones).toBeGreaterThan(0);
+    expect(resultado.rutas).toHaveLength(2);
+    expect(resultado.rutas[0].nodos_ruta).not.toEqual(resultado.rutas[1].nodos_ruta);
+    expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(1);
+  });
+
   test("debe descartar alternativas con el mismo recorrido", async () => {
     obtenerGrafoPeatonal.mockResolvedValue(
       crearGrafoUnSoloRecorrido()
@@ -308,7 +346,7 @@ describe("Generación de rutas alternativas", () => {
     expect(resultado.rutas).toHaveLength(1);
 
     expect(resultado.mensaje).toContain(
-      "Solo fue posible generar 1 rutas peatonales diferentes"
+      "Se prepararon 1 rutas distintas"
     );
 
     expect(obtenerGrafoPeatonal).toHaveBeenCalledTimes(1);

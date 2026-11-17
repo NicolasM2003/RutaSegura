@@ -14,6 +14,7 @@ import {
 } from "react-leaflet";
 import {
   BotonDelitos,
+  BotonConcentracionDelitos,
   BotonRedPeatonal,
   CentrarComuna,
   ControlesMapa,
@@ -22,11 +23,13 @@ import {
 } from "./ControlesMapa.web";
 import {
   CapaDelitos,
+  CapaConcentracionDelitos,
   CapaRedPeatonal,
   CapaZonasRiesgo,
   LeyendaMapa,
 } from "./CapasMapa.web";
 import UbicacionesMapaWeb from "./UbicacionesMapa.web";
+import { obtenerVisibilidadCapas } from "../visibilidad-capas";
 import {
   buscarDirecciones,
   type DestinoRuta,
@@ -258,6 +261,7 @@ export default function MapaRiesgoClient() {
   const [mostrarRedPeatonal, setMostrarRedPeatonal] = useState(false);
   const [mostrarZonasRiesgo, setMostrarZonasRiesgo] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
+  const [mostrarConcentracionDelitos, setMostrarConcentracionDelitos] = useState(false);
   const [cargandoRedPeatonal, setCargandoRedPeatonal] = useState(false);
   const [errorRedPeatonal, setErrorRedPeatonal] = useState(false);
   const [bbox, setBbox] = useState<string | null>(null);
@@ -290,9 +294,9 @@ export default function MapaRiesgoClient() {
   const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
   const [ruta, setRuta] = useState<any>(null);
   const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
+  const [perfilPrincipal, setPerfilPrincipal] = useState("menor_riesgo");
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
-
   const rutaAbortRef = useRef<AbortController | null>(null);
   const rutaIdRef = useRef(0);
 
@@ -537,6 +541,7 @@ export default function MapaRiesgoClient() {
         parametros.set("destino_lat", String(destino.latitud));
         parametros.set("destino_lon", String(destino.longitud));
         parametros.set("rango_horario", rangoHorario);
+        parametros.set("perfil_ruta", perfilPrincipal);
 
         const url =
           `http://localhost:3000/api/rutas/alternativas?${parametros.toString()}`;
@@ -558,6 +563,12 @@ export default function MapaRiesgoClient() {
         if (controlador.signal.aborted || id !== rutaIdRef.current) return;
 
         setRuta(resultado);
+        setRutaSeleccionada(
+          resultado.perfil_principal ??
+          resultado.rutas?.find((alternativa: any) => alternativa.es_ruta_principal)?.perfil_ruta ??
+          resultado.rutas?.[0]?.perfil_ruta ??
+          perfilPrincipal,
+        );
 
         if (resultado.encontrada === false) {
           setErrorRuta(
@@ -595,6 +606,7 @@ export default function MapaRiesgoClient() {
     destino,
     comunaRedPeatonal,
     rangoHorario,
+    perfilPrincipal,
   ]);
 
   useEffect(() => {
@@ -677,6 +689,12 @@ export default function MapaRiesgoClient() {
       controlador.abort();
     };
   }, [mostrarRedPeatonal, comunaRedPeatonal, bbox, zoom]);
+
+  const capasVisibles = obtenerVisibilidadCapas({
+    delitosIndividuales: mostrarDelitos,
+    concentracionDelitos: mostrarConcentracionDelitos,
+    zonasRiesgo: mostrarZonasRiesgo,
+  }, zoom);
 
   return (
     <div
@@ -764,60 +782,27 @@ export default function MapaRiesgoClient() {
 
         {[...rutasParaDibujar].reverse().map((alternativa: any) => {
           const geometria = alternativa.geometria as [number, number][];
-
-          if (geometria.length < 2) {
-            return null;
-          }
-
-          const colorRuta =
-            alternativa.perfil_ruta === "menor_riesgo"
-              ? "#16a34a"
-              : alternativa.perfil_ruta === "equilibrada"
-                ? "#2563eb"
-                : alternativa.perfil_ruta === "mas_rapida"
-                  ? "#ea580c"
-                  : "#64748b";
-
+          if (geometria.length < 2) return null;
+          const colorRuta = alternativa.perfil_ruta === "menor_riesgo"
+            ? "#16a34a"
+            : alternativa.perfil_ruta === "equilibrada"
+              ? "#2563eb"
+              : alternativa.perfil_ruta === "mas_rapida"
+                ? "#ea580c"
+                : "#64748b";
           return (
             <Polyline
               key={alternativa.perfil_ruta}
               positions={geometria}
-              pathOptions={{
-                color: colorRuta,
-                weight: 5,
-                opacity: 0.9,
-              }}
+              pathOptions={{ color: colorRuta, weight: 5, opacity: 0.9 }}
             >
               <Tooltip direction="top" offset={[0, -8]}>
-                <div
-                  style={{
-                    textAlign: "center",
-                    fontFamily: "Arial, sans-serif",
-                  }}
-                >
+                <div style={{ textAlign: "center", fontFamily: "Arial, sans-serif" }}>
                   <strong>{alternativa.nombre_perfil_ruta}</strong>
-
-                  <div>
-                    Distancia:{" "}
-                    {formatearDistancia(
-                      Number(alternativa.distancia_metros),
-                    )}
-                  </div>
-
-                  <div>
-                    Tiempo:{" "}
-                    {Number(
-                      alternativa.tiempo_estimado_minutos,
-                    ).toFixed(1)}{" "}
-                    min
-                  </div>
-
+                  <div>Distancia: {formatearDistancia(Number(alternativa.distancia_metros))}</div>
+                  <div>Tiempo: {Number(alternativa.tiempo_estimado_minutos).toFixed(1)} min</div>
                   <div>Riesgo: {alternativa.nivel_riesgo}</div>
-
-                  <div>
-                    Puntaje:{" "}
-                    {Number(alternativa.puntaje_riesgo).toFixed(2)}
-                  </div>
+                  <div>Puntaje: {Number(alternativa.puntaje_riesgo).toFixed(2)}</div>
                 </div>
               </Tooltip>
             </Polyline>
@@ -835,12 +820,16 @@ export default function MapaRiesgoClient() {
           />
         )}
 
-        {mostrarZonasRiesgo && (
+        {capasVisibles.delitosIndividuales && (
+          <CapaDelitos delitos={delitos} />
+        )}
+
+        {capasVisibles.zonasRiesgo && (
           <CapaZonasRiesgo zonas={zonas} zoom={zoom} />
         )}
 
-        {mostrarDelitos && zoom >= 13 && (
-          <CapaDelitos delitos={delitos} />
+        {capasVisibles.concentracionDelitos && (
+          <CapaConcentracionDelitos delitos={delitos} rangoHorario={rangoHorario} />
         )}
       </MapContainer>
 
@@ -850,6 +839,7 @@ export default function MapaRiesgoClient() {
         modo={modoSeleccion}
         comuna={comunaRedPeatonal}
         rangoHorario={rangoHorario}
+        perfilPrincipal={perfilPrincipal}
         alElegirModo={(modo) => {
           if (modo === "destino" && !origen) {
             setEstadoUbicacion("Primero establece un origen.");
@@ -862,54 +852,70 @@ export default function MapaRiesgoClient() {
         }}
         alReiniciar={reiniciarPuntos}
         alUsarMiUbicacion={usarMiUbicacion}
-        alCambiarComuna={setComunaRedPeatonal}
-        alCambiarHorario={setRangoHorario}
+        alCambiarComuna={(comuna) => {
+          setComunaRedPeatonal(comuna);
+              }}
+        alCambiarHorario={(horario) => {
+          setRangoHorario(horario);
+              }}
+        alCambiarPerfilPrincipal={setPerfilPrincipal}
         buscandoUbicacion={buscandoUbicacion}
         estadoUbicacion={estadoUbicacion}
         buscarDireccion={buscarDireccion}
         seleccionarDireccion={seleccionarDireccion}
       />
 
-      <BotonRedPeatonal
-        mostrar={mostrarRedPeatonal}
-        onClick={() =>
-          setMostrarRedPeatonal((actual) => !actual)
-        }
-      />
-
-      <BotonDelitos
-        mostrar={mostrarDelitos}
-        onClick={() =>
-          setMostrarDelitos((actual) => !actual)
-        }
-      />
-
-      <button
-        type="button"
-        onClick={() =>
-          setMostrarZonasRiesgo((actual) => !actual)
-        }
+      <div
         style={{
           position: "absolute",
-          zIndex: 10000,
-          top: 115,
-          right: 15,
-          background: mostrarZonasRiesgo ? "#dc2626" : "#ffffff",
-          color: mostrarZonasRiesgo ? "#ffffff" : "#111827",
-          border: "none",
-          borderRadius: 8,
-          padding: "10px 14px",
-          fontWeight: "bold",
-          fontSize: 14,
-          cursor: "pointer",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-          whiteSpace: "nowrap",
+          top: 12,
+          right: 12,
+          zIndex: 1100,
+          width: "min(350px, calc(100vw - 24px))",
+          maxHeight: "calc(100vh - 24px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 9,
+          overflowY: "auto",
+          boxSizing: "border-box",
         }}
       >
-        {mostrarZonasRiesgo
-          ? "Ocultar zonas de riesgo"
-          : "Mostrar zonas de riesgo"}
-      </button>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <BotonRedPeatonal
+          mostrar={mostrarRedPeatonal}
+          onClick={() => setMostrarRedPeatonal((actual) => !actual)}
+        />
+        <BotonDelitos
+          mostrar={mostrarDelitos}
+          onClick={() => setMostrarDelitos((actual) => !actual)}
+        />
+        <button
+          type="button"
+          onClick={() => setMostrarZonasRiesgo((actual) => !actual)}
+          style={{
+            flex: "1 1 140px",
+            minHeight: 40,
+            background: mostrarZonasRiesgo ? "#dc2626" : "#ffffff",
+            color: mostrarZonasRiesgo ? "#ffffff" : "#111827",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "9px 12px",
+            fontWeight: "bold",
+            fontSize: 13,
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+            whiteSpace: "normal",
+          }}
+        >
+          {mostrarZonasRiesgo ? "Ocultar zonas de riesgo" : "Mostrar zonas de riesgo"}
+        </button>
+        <BotonConcentracionDelitos
+          mostrar={mostrarConcentracionDelitos}
+          onClick={() => setMostrarConcentracionDelitos((actual) => !actual)}
+        />
+      </div>
+
+            </div>
 
       <EstadoRedPeatonal
         cargando={cargandoRedPeatonal}
@@ -1175,13 +1181,7 @@ export default function MapaRiesgoClient() {
                 type="button"
                 key={alternativa.perfil_ruta}
                 aria-pressed={seleccionada}
-                onClick={() =>
-                  setRutaSeleccionada((actual) =>
-                    actual === alternativa.perfil_ruta
-                      ? null
-                      : alternativa.perfil_ruta,
-                  )
-                }
+                onClick={() => setRutaSeleccionada(alternativa.perfil_ruta)}
                 style={{
                   display: "block",
                   width: "100%",
@@ -1212,6 +1212,20 @@ export default function MapaRiesgoClient() {
                   }}
                 >
                   <span>{alternativa.nombre_perfil_ruta}</span>
+
+                  {alternativa.es_ruta_principal && (
+                    <span
+                      style={{
+                        borderRadius: 999,
+                        padding: "2px 7px",
+                        background: "#dcfce7",
+                        color: "#166534",
+                        fontSize: 10,
+                      }}
+                    >
+                      Principal
+                    </span>
+                  )}
 
                   {recomendada && (
                     <span

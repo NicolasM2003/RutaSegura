@@ -4,17 +4,23 @@ import {
   Marker,
   Polyline,
 } from "react-native-maps";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { claveZonaRiesgo } from "./zonas";
+import { agruparConcentracionesDelitos, type DelitoConcentrado } from "../concentracion-delitos";
 
 export type ZonaRiesgo = {
   id_zona?: string | number;
   latitud: number | string;
   longitud: number | string;
   nivel: string;
+  metodo_agrupacion?: string;
   cantidad_delitos?: number;
   puntajeFinal?: number;
   comuna?: string;
+  geometria_zona?: {
+    radio_metros?: number;
+    centros?: Array<{ latitud: number | string; longitud: number | string }>;
+  };
 };
 
 export type Delito = {
@@ -27,6 +33,8 @@ export type Delito = {
   latitud: number | string;
   longitud: number | string;
 };
+
+export type ConcentracionDelitos = DelitoConcentrado<Delito>;
 
 export type SegmentoPeatonal = {
   id_osm?: string | number;
@@ -52,6 +60,10 @@ export type ElementoMapa =
   | {
       tipo: "delito";
       datos: Delito;
+    }
+  | {
+      tipo: "concentracion";
+      datos: ConcentracionDelitos;
     }
   | {
       tipo: "segmento";
@@ -228,20 +240,30 @@ export function CapaZonasRiesgo({
           .match(/.{2}/g)
           ?.map((value) => Number.parseInt(value, 16)) ?? [37, 99, 235];
 
+        const buffers = Array.isArray(zona.geometria_zona?.centros)
+          ? zona.geometria_zona.centros
+          : [{ latitud: latitude, longitud: longitude }];
+        const radioMetros = Number(zona.geometria_zona?.radio_metros) || radioZonaPorZoom(zoom);
+
         return (
           <Fragment key={key}>
-            <Circle
-              center={{
-                latitude,
-                longitude,
-              }}
-              radius={radioZonaPorZoom(zoom)}
-              strokeColor={colorSeleccion}
-              fillColor={esOrigen || esDestino
-                ? `rgba(${rgbSeleccion[0]}, ${rgbSeleccion[1]}, ${rgbSeleccion[2]}, 0.32)`
-                : `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${opacidadZonaPorZoom(zoom)})`}
-              strokeWidth={esOrigen || esDestino ? 4 : zoom <= 11 ? 1 : 2}
-            />
+            {buffers.map((buffer, bufferIndex) => {
+              const bufferLatitud = coordenada(buffer.latitud);
+              const bufferLongitud = coordenada(buffer.longitud);
+              if (bufferLatitud === null || bufferLongitud === null) return null;
+              return (
+                <Circle
+                  key={`${key}-buffer-${bufferIndex}`}
+                  center={{ latitude: bufferLatitud, longitude: bufferLongitud }}
+                  radius={radioMetros}
+                  strokeColor={colorSeleccion}
+                  fillColor={esOrigen || esDestino
+                    ? `rgba(${rgbSeleccion[0]}, ${rgbSeleccion[1]}, ${rgbSeleccion[2]}, 0.32)`
+                    : `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${opacidadZonaPorZoom(zoom)})`}
+                  strokeWidth={esOrigen || esDestino ? 4 : zoom <= 11 ? 1 : 2}
+                />
+              );
+            })}
 
             {habilitarSeleccionZona && <Marker
               coordinate={{
@@ -283,21 +305,9 @@ export function CapaDelitos({
   return (
     <>
       {delitos.map((delito) => {
-        const latitude = coordenada(
-          delito.latitud
-        );
-
-        const longitude = coordenada(
-          delito.longitud
-        );
-
-        if (
-          latitude === null ||
-          longitude === null
-        ) {
-          return null;
-        }
-
+        const latitude = coordenada(delito.latitud);
+        const longitude = coordenada(delito.longitud);
+        if (latitude === null || longitude === null) return null;
         return (
           <Marker
             key={delito.id}
@@ -307,22 +317,77 @@ export function CapaDelitos({
             }}
             pinColor="#111827"
             tracksViewChanges={false}
+            zIndex={40}
             onPress={() =>
               onSeleccionar({
                 tipo: "delito",
                 datos: delito,
               })
             }
-            accessibilityLabel={`Delito ${
-              delito.grupo_delito ??
-              "sin clasificar"
-            }`}
+            accessibilityLabel={`Delito ${delito.grupo_delito ?? "sin clasificar"}`}
           >
             <View style={styles.delitoMarker} />
           </Marker>
         );
       })}
     </>
+  );
+}
+
+export function CapaConcentracionDelitos({
+  delitos,
+  onSeleccionar,
+  rangoHorario,
+}: {
+  delitos: Delito[];
+  onSeleccionar: (item: ElementoMapa) => void;
+  rangoHorario?: string | null;
+}) {
+  const concentraciones = agruparConcentracionesDelitos(delitos, rangoHorario);
+  const fondos: Record<string, string> = {
+    "#16a34a": "rgba(22,163,74,0.76)",
+    "#facc15": "rgba(250,204,21,0.82)",
+    "#dc2626": "rgba(220,38,38,0.78)",
+  };
+
+  return (
+    <>
+      {concentraciones.map((concentracion) => (
+        <Marker
+          key={concentracion.id}
+          coordinate={{ latitude: concentracion.latitud, longitude: concentracion.longitud }}
+          tracksViewChanges={false}
+          zIndex={100}
+          onPress={() => onSeleccionar({ tipo: "concentracion", datos: concentracion })}
+          accessibilityLabel={`Concentración de delitos: ${concentracion.cantidad_delitos} registros`}
+        >
+          <View style={[styles.concentracionMarker, { backgroundColor: fondos[concentracion.color] }]}>
+            <Text style={[styles.concentracionCount, concentracion.cantidad_delitos >= 3 && styles.concentracionCountHigh]}>
+              {concentracion.cantidad_delitos}
+            </Text>
+          </View>
+        </Marker>
+      ))}
+    </>
+  );
+}
+
+export function LeyendaConcentracionDelitos() {
+  return (
+    <View pointerEvents="none" style={styles.concentracionLegend}>
+      <Text style={styles.concentracionLegendTitle}>Concentración de delitos</Text>
+      {[
+        ["#16a34a", "Verde: 1 delito."],
+        ["#facc15", "Amarillo: 2 delitos."],
+        ["#dc2626", "Rojo: 3 o más delitos."],
+      ].map(([color, label]) => (
+        <View key={label} style={styles.concentracionLegendRow}>
+          <View style={[styles.concentracionLegendDot, { backgroundColor: color }]} />
+          <Text style={styles.concentracionLegendText}>{label}</Text>
+        </View>
+      ))}
+      <Text style={styles.concentracionLegendNote}>Coordenadas reportadas; no puntos físicos exactos.</Text>
+    </View>
   );
 }
 
@@ -409,5 +474,66 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#ffffff",
     backgroundColor: "#111827",
+  },
+  concentracionMarker: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 3,
+  },
+  concentracionCount: {
+    color: "#111827",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+    includeFontPadding: false,
+  },
+  concentracionCountHigh: {
+    color: "#ffffff",
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowRadius: 2,
+  },
+  concentracionLegend: {
+    position: "absolute",
+    right: 12,
+    bottom: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.96)",
+    elevation: 4,
+  },
+  concentracionLegendTitle: {
+    marginBottom: 4,
+    color: "#111827",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  concentracionLegendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+    gap: 5,
+  },
+  concentracionLegendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderColor: "#fff",
+    borderWidth: 1,
+  },
+  concentracionLegendText: {
+    color: "#111827",
+    fontSize: 10,
+  },
+  concentracionLegendNote: {
+    marginTop: 2,
+    maxWidth: 190,
+    color: "#4b5563",
+    fontSize: 9,
   },
 });

@@ -8,6 +8,11 @@ export const RANGOS_HORARIOS = [
 ];
 
 const COMUNAS = ["Viña del Mar", "Valparaíso", "Concón"];
+const PERFILES = [
+  { value: "menor_riesgo", label: "Seguro" },
+  { value: "equilibrada", label: "Equilibrado" },
+  { value: "mas_rapida", label: "Rápido" },
+];
 
 type Props = {
   origen: { latitud: number; longitud: number } | null;
@@ -21,8 +26,12 @@ type Props = {
   onComuna: (value: string | null) => void;
   horario: string;
   onHorario: (value: string) => void;
+  perfilRuta: string;
+  onPerfilRuta: (value: string) => void;
   zonas: boolean;
   onZonas: () => void;
+  concentraciones: boolean;
+  onConcentraciones: () => void;
   delitos: boolean;
   onDelitos: () => void;
   red: boolean;
@@ -40,23 +49,34 @@ type Props = {
 export default function ControlesMapa({
   origen, destino, modoSeleccion, instruccionRuta,
   onElegirOrigen, onElegirDestino, onCambiarPuntos,
-  comuna, onComuna, horario, onHorario, zonas, onZonas,
-  delitos, onDelitos, red, onRed, cargando, error, zoom,
+  comuna, onComuna, horario, onHorario, perfilRuta, onPerfilRuta, zonas, onZonas,
+  concentraciones, onConcentraciones, delitos, onDelitos, red, onRed, cargando, error, zoom,
   onSolicitarUbicacion, cargandoUbicacion, estadoUbicacion,
   onBuscarDireccion, onSeleccionarDireccion,
 }: Props) {
-  const [selector, setSelector] = useState<"comuna" | "horario" | null>(null);
+  const [selector, setSelector] = useState<"comuna" | "horario" | "perfil" | null>(null);
   const [direccionAbierta, setDireccionAbierta] = useState(false);
   const [destinoDireccion, setDestinoDireccion] = useState<DestinoRuta>("origen");
   const [consultaDireccion, setConsultaDireccion] = useState("");
   const [resultadosDireccion, setResultadosDireccion] = useState<ResultadoDireccion[]>([]);
   const [buscandoDireccion, setBuscandoDireccion] = useState(false);
   const [errorDireccion, setErrorDireccion] = useState<string | null>(null);
-  const opciones = selector === "comuna" ? ["Seleccionar comuna", ...COMUNAS] : RANGOS_HORARIOS;
-  const seleccionado = selector === "comuna" ? comuna : horario;
+  const opciones = selector === "comuna"
+    ? ["Seleccionar comuna", ...COMUNAS]
+    : selector === "perfil"
+      ? PERFILES.map((perfil) => perfil.label)
+      : RANGOS_HORARIOS;
+  const seleccionado = selector === "comuna"
+    ? comuna
+    : selector === "perfil"
+      ? PERFILES.find((perfil) => perfil.value === perfilRuta)?.label
+      : horario;
   const elegir = (value: string) => {
     if (selector === "comuna") onComuna(value === "Seleccionar comuna" ? null : value);
-    else onHorario(value);
+    else if (selector === "perfil") {
+      const perfil = PERFILES.find((opcion) => opcion.label === value);
+      if (perfil) onPerfilRuta(perfil.value);
+    } else onHorario(value);
     setSelector(null);
   };
   const chip = (label: string, active: boolean, onPress: () => void, activeColor: string) => (
@@ -76,9 +96,18 @@ export default function ControlesMapa({
         {chip(comuna ? `Comuna: ${comuna}` : "Seleccionar comuna", !!comuna, () => setSelector("comuna"), "#1d4ed8")}
         {chip(horario, true, () => setSelector("horario"), "#1d4ed8")}
       </View>
+      <View style={styles.row}>
+        {chip(
+          `Preferencia: ${PERFILES.find((perfil) => perfil.value === perfilRuta)?.label ?? "Seguro"}`,
+          true,
+          () => setSelector("perfil"),
+          "#166534",
+        )}
+      </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
         {chip("Zonas", zonas, onZonas, "#dc2626")}
-        {chip("Delitos", delitos, onDelitos, "#111827")}
+        {chip("Concentración de delitos", concentraciones, onConcentraciones, "#7c3aed")}
+        {chip("Delitos individuales", delitos, onDelitos, "#111827")}
         {chip("Red peatonal", red, onRed, "#2563eb")}
       </ScrollView>
       <View style={styles.row}>
@@ -134,7 +163,9 @@ export default function ControlesMapa({
     <Modal visible={selector !== null} transparent animationType="fade" onRequestClose={() => setSelector(null)}>
       <Pressable style={styles.backdrop} onPress={() => setSelector(null)}>
         <View style={styles.modal}>
-          <Text style={styles.modalTitle}>{selector === "comuna" ? "Seleccionar comuna" : "Filtrar por horario"}</Text>
+          <Text style={styles.modalTitle}>
+            {selector === "comuna" ? "Seleccionar comuna" : selector === "perfil" ? "Preferencia de navegación" : "Filtrar por horario"}
+          </Text>
           {opciones.map((opcion) => <Pressable
             key={opcion}
             accessibilityRole="button"

@@ -1,493 +1,277 @@
+const { obtenerModeloRiesgo } = require("./zonas-riesgo.service");
+const { obtenerRedPeatonal } = require("./red-peatonal.service");
 const {
-  obtenerZonasRiesgo,
-} = require("./zonas-riesgo.service");
-
+  PESOS_EXPOSICION_TEMPORAL,
+  PESOS_MODELO,
+  RADIO_DELITO_AISLADO_METROS,
+  RADIO_HISTORICO_METROS,
+  REFERENCIA_DENSIDAD_TEMPORAL,
+  REFERENCIA_DENSIDAD_HISTORICA,
+  DENSIDAD_PRIOR_HISTORICA,
+  GRAVEDAD_PRIOR_HISTORICA,
+  MUESTREO_SEGMENTO_METROS,
+  POTENCIA_DECAIMIENTO,
+  VERSION,
+} = require("../config/modelo-riesgo.config");
 const {
-  obtenerRedPeatonal,
-} = require("./red-peatonal.service");
-
+  crearIndiceEspacial,
+  haversine,
+  intervaloSegmentoCirculo,
+  muestrearGeometria,
+  puntoEnSegmentoMetros,
+} = require("./riesgo-espacial.service");
 const {
   calcularCostoNavegacion,
   obtenerLongitudMaxima,
 } = require("./costo-ruta.service");
+const { clasificarRiesgo } = require("./riesgo.service");
 
-const TAMANO_CELDA = 0.004;
+const limitarPuntaje = (valor) => Math.max(0, Math.min(100, valor));
+const redondear = (valor, decimales = 2) => Number(valor.toFixed(decimales));
+const combinarRiesgoHibrido = (temporal, historico) => limitarPuntaje(
+  temporal * PESOS_MODELO.temporal + historico * PESOS_MODELO.historico
+);
 
-/*
- * ==========================================================
- * GEOMETRÍA DE ZONAS
- * ==========================================================
- */
-
-/*
- * Convierte una clave de zona:
- *
- * "-8241:-17878"
- *
- * en sus límites geográficos.
- */
-const obtenerLimitesZona = (
-  idZona
-) => {
-  const partes =
-    String(idZona).split(":");
-
-  if (
-    partes.length !== 2
-  ) {
-    return null;
-  }
-
-  const fila =
-    Number(partes[0]);
-
-  const columna =
-    Number(partes[1]);
-
-  if (
-    !Number.isFinite(fila) ||
-    !Number.isFinite(columna)
-  ) {
-    return null;
-  }
-
-  const minLat =
-    fila * TAMANO_CELDA;
-
-  const maxLat =
-    (fila + 1) *
-    TAMANO_CELDA;
-
-  const minLon =
-    columna * TAMANO_CELDA;
-
-  const maxLon =
-    (columna + 1) *
-    TAMANO_CELDA;
-
+const crearContextoRiesgo = async ({ comuna, rangoHorario, bbox, soloSupabase = false } = {}) => {
+  const [modelo, red] = await Promise.all([
+    obtenerModeloRiesgo({ comuna, rangoHorario }),
+    obtenerRedPeatonal({ comuna, bbox, soloSupabase }),
+  ]);
+  const centrosZona = modelo.zonas.flatMap((zona) =>
+    zona.geometria_zona.centros.map((centro) => ({
+      ...centro,
+      id_zona: zona.id_zona,
+      puntaje: zona.puntajeFinal,
+      nivel: zona.nivel,
+      radio_metros: zona.geometria_zona.radio_metros,
+    }))
+  );
   return {
-    minLat,
-    minLon,
-    maxLat,
-    maxLon,
+    red,
+    modelo,
+    indiceHistorico: crearIndiceEspacial(modelo.delitosHistoricos, RADIO_HISTORICO_METROS),
+    indiceAislados: crearIndiceEspacial(modelo.delitosAislados, RADIO_DELITO_AISLADO_METROS),
+    indiceCentrosZona: crearIndiceEspacial(centrosZona, modelo.zonas[0]?.geometria_zona.radio_metros || 75),
+    centrosZona,
   };
 };
 
-/*
- * ==========================================================
- * GEOMETRÍA DE SEGMENTOS
- * ==========================================================
- */
-
-/*
- * Calcula la longitud euclidiana aproximada
- * de un tramo en coordenadas geográficas.
- *
- * Para comparar proporciones dentro de una misma zona
- * es suficiente para esta versión.
- */
-const distanciaPlano = (
-  puntoA,
-  puntoB
-) => {
-  const deltaLat =
-    Number(puntoB.latitud) -
-    Number(puntoA.latitud);
-
-  const deltaLon =
-    Number(puntoB.longitud) -
-    Number(puntoA.longitud);
-
-  return Math.sqrt(
-    deltaLat ** 2 +
-      deltaLon ** 2
-  );
+const fusionarIntervalos = (intervalos) => {
+  const ordenados = [...intervalos].sort((a, b) => a[0] - b[0]);
+  const fusionados = [];
+  for (const intervalo of ordenados) {
+    const ultimo = fusionados[fusionados.length - 1];
+    if (!ultimo || intervalo[0] > ultimo[1]) fusionados.push([...intervalo]);
+    else ultimo[1] = Math.max(ultimo[1], intervalo[1]);
+  }
+  return fusionados;
 };
 
-/*
- * Calcula qué proporción de un segmento lineal
- * queda dentro de un rectángulo.
- *
- * Utiliza Liang-Barsky.
- */
-const proporcionDentroRectangulo = (
-  puntoA,
-  puntoB,
-  zona
-) => {
-  const x1 = Number(
-    puntoA.longitud
-  );
+const calcularExposicionZonas = (geometria, contexto) => {
+  const largoTotal = geometria.slice(0, -1).reduce((suma, inicio, i) => suma + haversine(inicio, geometria[i + 1]), 0);
+  if (!Number.isFinite(largoTotal) || largoTotal <= 0 || !contexto.centrosZona.length) {
+    return { puntaje: 0, zonas: [], largoTotal: Number.isFinite(largoTotal) ? largoTotal : 0 };
+  }
 
-  const y1 = Number(
-    puntoA.latitud
-  );
-
-  const x2 = Number(
-    puntoB.longitud
-  );
-
-  const y2 = Number(
-    puntoB.latitud
-  );
-
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-
-  const p = [
-    -dx,
-    dx,
-    -dy,
-    dy,
-  ];
-
-  const q = [
-    x1 - zona.minLon,
-    zona.maxLon - x1,
-    y1 - zona.minLat,
-    zona.maxLat - y1,
-  ];
-
-  let tEntrada = 0;
-  let tSalida = 1;
-
-  for (
-    let i = 0;
-    i < 4;
-    i++
-  ) {
-    if (p[i] === 0) {
-      if (q[i] < 0) {
-        return 0;
-      }
-
-      continue;
+  let integralPuntaje = 0;
+  const largoPorZona = new Map();
+  for (let i = 0; i < geometria.length - 1; i += 1) {
+    const inicio = geometria[i];
+    const fin = geometria[i + 1];
+    const largo = haversine(inicio, fin);
+    if (!Number.isFinite(largo) || largo <= 0) continue;
+    const candidatos = contexto.indiceCentrosZona.buscarEnGeometria([inicio, fin], 75);
+    const intervalos = [];
+    const porZona = new Map();
+    for (const centro of candidatos) {
+      const intervalo = intervaloSegmentoCirculo(inicio, fin, centro, centro.radio_metros, contexto.indiceCentrosZona);
+      if (!intervalo) continue;
+      intervalos.push({ intervalo, id: centro.id_zona, puntaje: centro.puntaje, nivel: centro.nivel });
+      if (!porZona.has(centro.id_zona)) porZona.set(centro.id_zona, []);
+      porZona.get(centro.id_zona).push(intervalo);
     }
 
-    const t =
-      q[i] / p[i];
+    const limites = [...new Set([0, 1, ...intervalos.flatMap(({ intervalo }) => intervalo)])].sort((a, b) => a - b);
+    for (let j = 0; j < limites.length - 1; j += 1) {
+      const a = limites[j];
+      const b = limites[j + 1];
+      const medio = (a + b) / 2;
+      const puntajeActivo = intervalos
+        .filter(({ intervalo }) => medio >= intervalo[0] && medio <= intervalo[1])
+        .reduce((maximo, zona) => Math.max(maximo, zona.puntaje), 0);
+      integralPuntaje += largo * (b - a) * puntajeActivo;
+    }
 
-    if (p[i] < 0) {
-      if (t > tSalida) {
-        return 0;
-      }
-
-      if (t > tEntrada) {
-        tEntrada = t;
-      }
-    } else {
-      if (t < tEntrada) {
-        return 0;
-      }
-
-      if (t < tSalida) {
-        tSalida = t;
-      }
+    for (const [id, tramos] of porZona) {
+      const largoZona = fusionarIntervalos(tramos).reduce((suma, [a, b]) => suma + largo * (b - a), 0);
+      largoPorZona.set(id, (largoPorZona.get(id) || 0) + largoZona);
     }
   }
 
-  if (
-    tEntrada > tSalida
-  ) {
-    return 0;
-  }
-
-  return Math.max(
-    0,
-    Math.min(
-      1,
-      tSalida - tEntrada
-    )
-  );
-};
-
-/*
- * Calcula cuánto del segmento completo
- * cae dentro de una zona.
- */
-const calcularLongitudDentroZona = (
-  geometria,
-  zona
-) => {
-  if (
-    !Array.isArray(geometria) ||
-    geometria.length < 2
-  ) {
-    return 0;
-  }
-
-  let longitudTotal = 0;
-  let longitudDentro = 0;
-
-  for (
-    let i = 0;
-    i < geometria.length - 1;
-    i++
-  ) {
-    const puntoA =
-      geometria[i];
-
-    const puntoB =
-      geometria[i + 1];
-
-    const longitudTramo =
-      distanciaPlano(
-        puntoA,
-        puntoB
-      );
-
-    if (
-      longitudTramo <= 0
-    ) {
-      continue;
-    }
-
-    longitudTotal +=
-      longitudTramo;
-
-    const proporcion =
-      proporcionDentroRectangulo(
-        puntoA,
-        puntoB,
-        zona
-      );
-
-    longitudDentro +=
-      longitudTramo *
-      proporcion;
-  }
-
-  if (
-    longitudTotal <= 0
-  ) {
-    return 0;
-  }
-
-  return Math.min(
-    1,
-    Math.max(
-      0,
-      longitudDentro /
-        longitudTotal
-    )
-  );
-};
-
-/*
- * ==========================================================
- * RIESGO DE SEGMENTOS
- * ==========================================================
- */
-
-const clasificarNivel = (
-  puntaje
-) => {
-  if (puntaje <= 33) {
-    return "Bajo";
-  }
-
-  if (puntaje <= 66) {
-    return "Medio";
-  }
-
-  return "Alto";
-};
-
-const calcularRiesgoSegmento = (
-  segmento,
-  zonas
-) => {
-  const zonasIntersectadas = [];
-
-  let sumaPonderada = 0;
-  let pesoTotal = 0;
-
-  for (
-    const zona of zonas
-  ) {
-    const limites =
-      obtenerLimitesZona(
-        zona.id_zona
-      );
-
-    if (!limites) {
-      continue;
-    }
-
-    const proporcion =
-      calcularLongitudDentroZona(
-        segmento.geometria,
-        limites
-      );
-
-    if (
-      proporcion <= 0
-    ) {
-      continue;
-    }
-
-    const puntaje =
-      Number(
-        zona.puntajeFinal
-      );
-
-    if (
-      !Number.isFinite(
-        puntaje
-      )
-    ) {
-      continue;
-    }
-
-    zonasIntersectadas.push({
-      id_zona:
-        zona.id_zona,
-
-      nivel:
-        zona.nivel,
-
-      puntajeFinal:
-        puntaje,
-
-      proporcion:
-        Number(
-          proporcion.toFixed(4)
-        ),
-    });
-
-    sumaPonderada +=
-      puntaje *
-      proporcion;
-
-    pesoTotal +=
-      proporcion;
-  }
-
-  if (
-    pesoTotal === 0
-  ) {
+  const zonaPorId = new Map(contexto.modelo.zonas.map((zona) => [zona.id_zona, zona]));
+  const zonas = [...largoPorZona.entries()].filter(([, largo]) => largo > 0).map(([id, largo]) => {
+    const zona = zonaPorId.get(id);
     return {
-      puntajeRiesgo: 0,
-      nivelRiesgo: "Bajo",
-      zonasIntersectadas: [],
-      cantidadZonasIntersectadas: 0,
+      id_zona: id,
+      nivel: zona.nivel,
+      puntajeFinal: zona.puntajeFinal,
+      longitud_afectada_metros: redondear(largo),
+      proporcion_segmento: redondear(Math.min(1, largo / largoTotal), 4),
+    };
+  });
+  return {
+    puntaje: limitarPuntaje(integralPuntaje / largoTotal),
+    zonas,
+    largoTotal,
+  };
+};
+
+const calcularExposicionIncidentes = ({ geometria, indice, radioMetros, referencia }) => {
+  const muestras = muestrearGeometria(geometria, MUESTREO_SEGMENTO_METROS, indice);
+  if (!muestras.length) return { puntaje: 0, densidad: 0, gravedadMedia: 0, incidentes: [] };
+  const candidatos = indice.buscarEnGeometria(geometria, radioMetros);
+  let intensidadTotal = 0;
+  let gravedadPonderadaTotal = 0;
+  let pesoGravedadTotal = 0;
+  for (const muestra of muestras) {
+    for (const incidente of indice.buscarCercanos(muestra, radioMetros)) {
+      const distancia = haversine(muestra, incidente);
+      const peso = Math.max(0, 1 - distancia / radioMetros) ** POTENCIA_DECAIMIENTO;
+      if (peso <= 0) continue;
+      intensidadTotal += peso;
+      const gravedad = Number(incidente.puntaje_gravedad ?? incidente.puntaje_gravedad_estimado ?? 50);
+      gravedadPonderadaTotal += peso * gravedad;
+      pesoGravedadTotal += peso;
+    }
+  }
+  const densidad = intensidadTotal / muestras.length;
+  const gravedadMedia = pesoGravedadTotal > 0 ? gravedadPonderadaTotal / pesoGravedadTotal : 0;
+  const puntajeDensidad = Math.min(densidad / referencia, 1) * 100;
+  const puntaje = limitarPuntaje(puntajeDensidad * gravedadMedia / 100);
+
+  const incidentes = candidatos
+    .map((incidente) => {
+      const distancia = Math.min(...geometria.slice(0, -1).map((inicio, i) =>
+        puntoEnSegmentoMetros(incidente, inicio, geometria[i + 1], indice)
+      ));
+      const peso = Math.max(0, 1 - distancia / radioMetros) ** POTENCIA_DECAIMIENTO;
+      return { incidente, distancia, peso };
+    })
+    .filter(({ distancia }) => distancia <= radioMetros)
+    .sort((a, b) => a.distancia - b.distancia)
+    .map(({ incidente, distancia, peso }) => ({
+      id: incidente.id,
+      distancia_metros: redondear(distancia),
+      puntaje_gravedad: incidente.puntaje_gravedad,
+      influencia: redondear(peso, 4),
+    }));
+  return { puntaje, densidad, gravedadMedia, incidentes };
+};
+
+const calcularRiesgoSegmento = (segmento, contexto) => {
+  const geometria = Array.isArray(segmento.geometria) ? segmento.geometria : [];
+  if (geometria.length < 2) {
+    return {
+      puntaje_riesgo_temporal: 0,
+      puntaje_riesgo_historico: 0,
+      puntaje_riesgo: 0,
+      nivel_riesgo: "Bajo",
+      zonas_intersectadas: [],
+      delitos_individuales_cercanos: [],
+      cobertura_riesgo: contexto?.modelo?.cobertura || { estado: "sin_datos" },
+      estado_riesgo_local: "geometria_insuficiente",
     };
   }
 
-  const puntajeRiesgo =
-    sumaPonderada /
-    pesoTotal;
+  const zonas = calcularExposicionZonas(geometria, contexto);
+  const aislados = calcularExposicionIncidentes({
+    geometria,
+    indice: contexto.indiceAislados,
+    radioMetros: RADIO_DELITO_AISLADO_METROS,
+    referencia: REFERENCIA_DENSIDAD_TEMPORAL,
+  });
+  const historico = calcularExposicionIncidentes({
+    geometria,
+    indice: contexto.indiceHistorico,
+    radioMetros: RADIO_HISTORICO_METROS,
+    referencia: REFERENCIA_DENSIDAD_HISTORICA,
+  });
+  const sinIncidentesHistoricosLocales = historico.incidentes.length === 0;
+  const riesgoHistorico = sinIncidentesHistoricosLocales
+    ? Math.min(DENSIDAD_PRIOR_HISTORICA / REFERENCIA_DENSIDAD_HISTORICA, 1) * GRAVEDAD_PRIOR_HISTORICA
+    : historico.puntaje;
+  const densidadHistorica = sinIncidentesHistoricosLocales
+    ? DENSIDAD_PRIOR_HISTORICA
+    : historico.densidad;
+  const gravedadHistorica = sinIncidentesHistoricosLocales
+    ? GRAVEDAD_PRIOR_HISTORICA
+    : historico.gravedadMedia;
+  const rangoEspecificado = contexto.modelo.modoTemporal === "rango_seleccionado";
+  const riesgoTemporal = rangoEspecificado
+    ? limitarPuntaje(zonas.puntaje * PESOS_EXPOSICION_TEMPORAL.zonas + aislados.puntaje * PESOS_EXPOSICION_TEMPORAL.aislados)
+    : 0;
+  const riesgoFinal = combinarRiesgoHibrido(riesgoTemporal, riesgoHistorico);
+  const cercanos = new Map();
+  for (const incidente of [...aislados.incidentes, ...historico.incidentes]) {
+    cercanos.set(incidente.id, incidente);
+  }
+  const hayIncidentesLocales = aislados.incidentes.length > 0 || historico.incidentes.length > 0 || zonas.zonas.length > 0;
+  const cobertura = contexto.modelo.cobertura;
 
   return {
-    puntajeRiesgo:
-      Number(
-        puntajeRiesgo.toFixed(2)
-      ),
-
-    nivelRiesgo:
-      clasificarNivel(
-        puntajeRiesgo
-      ),
-
-    zonasIntersectadas,
-
-    cantidadZonasIntersectadas:
-      zonasIntersectadas.length,
+    puntaje_riesgo_temporal: redondear(riesgoTemporal),
+    puntaje_riesgo_historico: redondear(riesgoHistorico),
+    puntaje_riesgo: redondear(riesgoFinal),
+    nivel_riesgo: clasificarRiesgo(riesgoFinal),
+    zonas_intersectadas: zonas.zonas,
+    delitos_individuales_cercanos: aislados.incidentes,
+    cantidad_delitos_historicos_cercanos: historico.incidentes.length,
+    densidad_historica_normalizada: redondear(Math.min(densidadHistorica / REFERENCIA_DENSIDAD_HISTORICA, 1), 4),
+    gravedad_historica_ponderada: redondear(gravedadHistorica),
+    riesgo_historico_es_prior: sinIncidentesHistoricosLocales,
+    cobertura_riesgo: cobertura,
+    version_modelo_riesgo: VERSION,
+    rango_horario_evaluado: contexto.modelo.rangoHorario,
+    modo_temporal: contexto.modelo.modoTemporal,
+    estado_riesgo_local: !hayIncidentesLocales
+      ? (cobertura.estado === "sin_registros" ? "sin_datos_disponibles" : "sin_incidentes_cercanos_registrados_no_equivale_a_seguridad")
+      : (cobertura.estado === "cobertura_parcial" ? "datos_parciales" : "incidentes_registrados_evaluados"),
+    cantidad_incidentes_unicos_cercanos: cercanos.size,
   };
 };
 
-/*
- * ==========================================================
- * OBTENER RED CON RIESGO
- * ==========================================================
- */
+const obtenerDatosRedConRiesgo = crearContextoRiesgo;
 
-const obtenerRedPeatonalConRiesgo =
-  async ({
-    comuna,
-    rangoHorario,
-    bbox,
-    soloSupabase = false,
-  }) => {
-    const [zonas, red] =
-      await Promise.all([
-        obtenerZonasRiesgo({
-          comuna,
-          rangoHorario,
-        }),
-
-        obtenerRedPeatonal({
-          comuna,
-          bbox,
-          soloSupabase,
-        }),
-      ]);
-
-    const longitudMaxima =
-      obtenerLongitudMaxima(
-        red
-      );
-
-    return red.map(
-      (segmento) => {
-        const resultado =
-          calcularRiesgoSegmento(
-            segmento,
-            zonas
-          );
-
-        const costos =
-          calcularCostoNavegacion({
-            puntajeRiesgo:
-              resultado.puntajeRiesgo,
-
-            longitudMetros:
-              segmento.longitud_metros,
-
-            longitudMaxima,
-          });
-
-        return {
-          ...segmento,
-
-          puntaje_riesgo:
-            resultado.puntajeRiesgo,
-
-          nivel_riesgo:
-            resultado.nivelRiesgo,
-
-          zonas_intersectadas:
-            resultado.zonasIntersectadas,
-
-          cantidad_zonas_intersectadas:
-            resultado.cantidadZonasIntersectadas,
-
-          costo_riesgo:
-            costos.costo_riesgo,
-
-          costo_riesgo_normalizado:
-            costos.costo_riesgo,
-
-          costo_distancia:
-            costos.costo_distancia,
-
-          costo_distancia_normalizado:
-            costos.costo_distancia,
-
-          costo_navegacion:
-            costos.costo_navegacion,
-
-          costo_navegacion_normalizado:
-            costos.costo_navegacion,
-        };
-      }
-    );
-  };
+const obtenerRedPeatonalConRiesgo = async (parametros) => {
+  const contexto = await crearContextoRiesgo(parametros);
+  const longitudMaxima = obtenerLongitudMaxima(contexto.red);
+  return contexto.red.map((segmento) => {
+    const riesgo = calcularRiesgoSegmento(segmento, contexto);
+    const costos = calcularCostoNavegacion({
+      puntajeRiesgo: riesgo.puntaje_riesgo,
+      longitudMetros: segmento.longitud_metros,
+      longitudMaxima,
+    });
+    return {
+      ...segmento,
+      ...riesgo,
+      nivel_riesgo: riesgo.nivel_riesgo,
+      cantidad_zonas_intersectadas: riesgo.zonas_intersectadas.length,
+      costo_riesgo: costos.costo_riesgo,
+      costo_riesgo_normalizado: costos.costo_riesgo,
+      costo_distancia: costos.costo_distancia,
+      costo_distancia_normalizado: costos.costo_distancia,
+      costo_navegacion: costos.costo_navegacion,
+      costo_navegacion_normalizado: costos.costo_navegacion,
+    };
+  });
+};
 
 module.exports = {
   obtenerRedPeatonalConRiesgo,
+  obtenerDatosRedConRiesgo,
   calcularRiesgoSegmento,
-  obtenerLimitesZona,
-  calcularLongitudDentroZona,
-  proporcionDentroRectangulo,
+  calcularExposicionZonas,
+  calcularExposicionIncidentes,
+  combinarRiesgoHibrido,
 };

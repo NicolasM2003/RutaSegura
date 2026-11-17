@@ -1,5 +1,6 @@
 const {
-  obtenerRedPeatonalConRiesgo,
+  obtenerDatosRedConRiesgo,
+  calcularRiesgoSegmento,
 } = require("./riesgo-red.service");
 const {
   calcularCostoOperativoArista,
@@ -244,13 +245,13 @@ const obtenerGrafoPeatonal = async ({
   bbox,
   soloSupabase = false,
 } = {}) => {
-  const vias =
-    await obtenerRedPeatonalConRiesgo({
-      comuna,
-      rangoHorario,
-      bbox,
-      soloSupabase,
-    });
+  const contextoRiesgo = await obtenerDatosRedConRiesgo({
+    comuna,
+    rangoHorario,
+    bbox,
+    soloSupabase,
+  });
+  const vias = contextoRiesgo.red;
 
   const nodosMap = new Map();
   const aristas = [];
@@ -265,24 +266,6 @@ const obtenerGrafoPeatonal = async ({
     if (
       geometria.length < 2
     ) {
-      continue;
-    }
-
-    /*
-     * Riesgo normalizado entre 0 y 1.
-     */
-    const riesgoNormalizado =
-      Math.min(
-        Math.max(
-          Number(
-            via.puntaje_riesgo ?? 0
-          ) / 100,
-          0
-        ),
-        1
-      );
-
-    if (!Number.isFinite(riesgoNormalizado)) {
       continue;
     }
 
@@ -352,13 +335,19 @@ const obtenerGrafoPeatonal = async ({
         continue;
       }
 
-      const costoArista =
-        calcularCostoOperativoArista(
-          distancia,
-          riesgoNormalizado,
-          PESO_DISTANCIA,
-          PESO_RIESGO
-        );
+      const riesgoSegmento = calcularRiesgoSegmento({
+        geometria: [nodoOrigen, nodoDestino],
+      }, contextoRiesgo);
+      const riesgoNormalizadoSegmento = Math.min(
+        Math.max(riesgoSegmento.puntaje_riesgo / 100, 0),
+        1
+      );
+      const costoAristaSegmento = calcularCostoOperativoArista(
+        distancia,
+        riesgoNormalizadoSegmento,
+        PESO_DISTANCIA,
+        PESO_RIESGO
+      );
 
       const arista = {
         id: `${via.id_osm}-${i}`,
@@ -375,20 +364,53 @@ const obtenerGrafoPeatonal = async ({
         distancia_metros:
           distancia,
 
+        puntaje_riesgo_temporal:
+          riesgoSegmento.puntaje_riesgo_temporal,
+
+        puntaje_riesgo_historico:
+          riesgoSegmento.puntaje_riesgo_historico,
+
         puntaje_riesgo:
-          Number(
-            via.puntaje_riesgo ?? 0
-          ),
+          riesgoSegmento.puntaje_riesgo,
 
         nivel_riesgo:
-          via.nivel_riesgo ??
-          "Bajo",
+          riesgoSegmento.nivel_riesgo,
+
+        cobertura_riesgo:
+          riesgoSegmento.cobertura_riesgo,
+
+        estado_riesgo_local:
+          riesgoSegmento.estado_riesgo_local,
+
+        version_modelo_riesgo:
+          riesgoSegmento.version_modelo_riesgo,
+
+        rango_horario_evaluado:
+          riesgoSegmento.rango_horario_evaluado,
+
+        modo_temporal:
+          riesgoSegmento.modo_temporal,
+
+        densidad_historica_normalizada:
+          riesgoSegmento.densidad_historica_normalizada,
+
+        gravedad_historica_ponderada:
+          riesgoSegmento.gravedad_historica_ponderada,
+
+        riesgo_historico_es_prior:
+          riesgoSegmento.riesgo_historico_es_prior,
+
+        cantidad_delitos_historicos_cercanos:
+          riesgoSegmento.cantidad_delitos_historicos_cercanos,
+
+        delitos_individuales_cercanos:
+          riesgoSegmento.delitos_individuales_cercanos,
 
         costo_riesgo:
           Number(
             (
               distancia *
-              riesgoNormalizado
+              riesgoNormalizadoSegmento
             ).toFixed(4)
           ),
 
@@ -402,15 +424,17 @@ const obtenerGrafoPeatonal = async ({
 
         costo_arista:
           Number(
-            costoArista.toFixed(4)
+            costoAristaSegmento.toFixed(4)
           ),
 
         zonas_intersectadas:
-          Array.isArray(
-            via.zonas_intersectadas
-          )
-            ? via.zonas_intersectadas
-            : [],
+          riesgoSegmento.zonas_intersectadas,
+
+        cantidad_zonas_intersectadas:
+          riesgoSegmento.zonas_intersectadas.length,
+
+        puntaje_riesgo_combinado:
+          riesgoSegmento.puntaje_riesgo,
 
         nombre:
           via.nombre,
@@ -453,6 +477,7 @@ const obtenerGrafoPeatonal = async ({
 
         step_count:
           via.step_count,
+
       };
 
       aristas.push(arista);
@@ -542,6 +567,15 @@ const obtenerGrafoPeatonal = async ({
 
       cantidad_vias:
         vias.length,
+
+      version_modelo_riesgo:
+        contextoRiesgo.modelo.version,
+
+      rango_horario_riesgo:
+        contextoRiesgo.modelo.rangoHorario,
+
+      cobertura_riesgo:
+        contextoRiesgo.modelo.cobertura,
 
       componentes_conectados:
         conectividad.cantidad_componentes,
