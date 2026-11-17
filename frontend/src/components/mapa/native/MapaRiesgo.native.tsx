@@ -17,9 +17,11 @@ import MapView, {
 import ControlesMapa, { RANGOS_HORARIOS } from "./ControlesMapa.native";
 import {
   CapaDelitos,
+  CapaConcentracionDelitos,
   CapaRedPeatonal,
   CapaPuntosRuta,
   CapaZonasRiesgo,
+  LeyendaConcentracionDelitos,
   type Delito,
   type ElementoMapa,
   type SegmentoPeatonal,
@@ -37,6 +39,7 @@ import {
   type DestinoRuta,
   type ResultadoDireccion,
 } from "../direccion";
+import { obtenerVisibilidadCapas } from "../visibilidad-capas";
 const REGION_INICIAL: Region = {
   latitude: -33.0245,
   longitude: -71.5518,
@@ -50,6 +53,7 @@ type Carga<T> = {
 type RutaAlternativa = {
   perfil_ruta: string;
   nombre_perfil_ruta?: string;
+  es_ruta_principal?: boolean;
   geometria?: unknown;
   distancia_metros?: number;
   tiempo_estimado_minutos?: number;
@@ -74,6 +78,7 @@ type InterpretacionIA = {
 type ResultadoRuta = {
   encontrada?: boolean;
   cantidad_rutas?: number;
+  perfil_principal?: string;
   rutas?: RutaAlternativa[];
   mensaje?: string;
   message?: string;
@@ -179,6 +184,9 @@ function FichaElemento({
           ["Comuna", elemento.datos.comuna],
           ["Cantidad de delitos", elemento.datos.cantidad_delitos],
           ["Puntaje final", elemento.datos.puntajeFinal],
+          ["Agrupación", elemento.datos.metodo_agrupacion === "coordenadas_reportadas_identicas"
+            ? "Dos coordenadas reportadas idénticas"
+            : "DBSCAN"],
         ]
       : elemento.tipo === "delito"
         ? [
@@ -188,7 +196,14 @@ function FichaElemento({
             ["Lugar", elemento.datos.lugar],
             ["Comuna", elemento.datos.comuna],
           ]
-        : [
+        : elemento.tipo === "concentracion"
+          ? [
+              ["Cantidad de registros", elemento.datos.cantidad_delitos],
+              ["Rango horario", elemento.datos.rango_horario],
+              ["Latitud reportada", elemento.datos.latitud],
+              ["Longitud reportada", elemento.datos.longitud],
+            ]
+          : [
             ["Nombre", elemento.datos.nombre],
             ["Tipo", elemento.datos.tipo],
             ["Categoría peatonal", elemento.datos.categoria_peatonal],
@@ -208,7 +223,9 @@ function FichaElemento({
       ? "Zona de riesgo"
       : elemento.tipo === "delito"
         ? "Evento delictual"
-        : "Segmento peatonal";
+        : elemento.tipo === "concentracion"
+          ? "Concentración de delitos"
+          : "Segmento peatonal";
   return (
     <View style={styles.infoCard}>
       <View style={styles.infoHeader}>
@@ -228,6 +245,19 @@ function FichaElemento({
           {valor(content)}
         </Text>
       ))}
+      {elemento.tipo === "concentracion" && (
+        <>
+          <Text style={styles.infoLine}>
+            <Text style={styles.infoLabel}>Ubicación: </Text>
+            Coordenada reportada; no representa un punto físico exacto.
+          </Text>
+          {elemento.datos.delitos.map((delito, index) => (
+            <Text key={delito.id ?? index} style={styles.infoLine}>
+              {`Registro ${index + 1}: ${valor(delito.fecha, "Fecha no informada")} · ${valor(delito.grupo_delito, "Grupo no informado")} · ${valor(delito.lugar, "Lugar no informado")}`}
+            </Text>
+          ))}
+        </>
+      )}
     </View>
   );
 }
@@ -244,6 +274,7 @@ export default function MapaRiesgo() {
   const [segmentos, setSegmentos] = useState<SegmentoPeatonal[]>([]);
   const [mostrarZonas, setMostrarZonas] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
+  const [mostrarConcentracionDelitos, setMostrarConcentracionDelitos] = useState(false);
   const [mostrarRed, setMostrarRed] = useState(false);
   const [cargandoRed, setCargandoRed] = useState(false);
   const [cargando, setCargando] = useState(false);
@@ -265,6 +296,7 @@ export default function MapaRiesgo() {
   >(null);
   const [ruta, setRuta] = useState<ResultadoRuta | null>(null);
   const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
+  const [perfilPrincipal, setPerfilPrincipal] = useState("menor_riesgo");
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
   const rutaId = useRef(0);
@@ -514,6 +546,7 @@ export default function MapaRiesgo() {
       destino_lat: String(destino.latitud),
       destino_lon: String(destino.longitud),
       rango_horario: horario,
+      perfil_ruta: perfilPrincipal,
     });
     if (comuna) {
       params.set("comuna", comuna);
@@ -541,6 +574,12 @@ export default function MapaRiesgo() {
           ...result,
           rutas: rutasNormalizadas,
         });
+        setRutaSeleccionada(
+          result.perfil_principal ??
+          rutasNormalizadas.find((ruta) => ruta.es_ruta_principal)?.perfil_ruta ??
+          rutasNormalizadas[0]?.perfil_ruta ??
+          perfilPrincipal,
+        );
         if (
           result.encontrada === false ||
           rutasNormalizadas.length === 0
@@ -570,7 +609,7 @@ export default function MapaRiesgo() {
         rutaAbort.current = null;
       }
     };
-  }, [origen, destino, horario, comuna]);
+  }, [origen, destino, horario, comuna, perfilPrincipal]);
   useEffect(() => {
     if (ruta?.encontrada === false) return;
     const alternativasParaEncuadrar = (ruta?.rutas ?? []).filter(
@@ -735,8 +774,13 @@ export default function MapaRiesgo() {
   const zonasVisibles = zonas.filter((zona) =>
     estaEnVista(zona.latitud, zona.longitud, region),
   );
+  const capasVisibles = obtenerVisibilidadCapas({
+    delitosIndividuales: mostrarDelitos,
+    concentracionDelitos: mostrarConcentracionDelitos,
+    zonasRiesgo: mostrarZonas,
+  }, zoom);
   const delitosVisibles =
-    mostrarDelitos && zoom >= 13
+    (capasVisibles.delitosIndividuales || capasVisibles.concentracionDelitos)
       ? delitos.filter((delito) =>
           estaEnVista(delito.latitud, delito.longitud, region),
         )
@@ -771,11 +815,17 @@ export default function MapaRiesgo() {
             onSeleccionar={seleccionarElemento}
           />
         )}
-        {mostrarZonas && (
+        {delitosVisibles.length > 0 && capasVisibles.delitosIndividuales && (
+          <CapaDelitos
+            delitos={delitosVisibles}
+            onSeleccionar={seleccionarElemento}
+          />
+        )}
+        {capasVisibles.zonasRiesgo && (
           <CapaZonasRiesgo
             zonas={zonasVisibles}
             zoom={zoom}
-            visible={mostrarZonas}
+            visible={capasVisibles.zonasRiesgo}
             onSeleccionar={seleccionarElemento}
             zonaOrigenSeleccionada={
               zonaOrigenDetectada
@@ -790,9 +840,10 @@ export default function MapaRiesgo() {
             habilitarSeleccionZona={!modoSeleccion}
           />
         )}
-        {delitosVisibles.length > 0 && (
-          <CapaDelitos
+        {delitosVisibles.length > 0 && capasVisibles.concentracionDelitos && (
+          <CapaConcentracionDelitos
             delitos={delitosVisibles}
+            rangoHorario={horario}
             onSeleccionar={seleccionarElemento}
           />
         )}
@@ -821,6 +872,7 @@ export default function MapaRiesgo() {
           ubicacion={ubicacion}
         />
       </MapView>
+      {capasVisibles.concentracionDelitos && <LeyendaConcentracionDelitos />}
       <ControlesMapa
         origen={origen}
         destino={destino}
@@ -843,8 +895,12 @@ export default function MapaRiesgo() {
         onComuna={cambiarComuna}
         horario={horario}
         onHorario={setHorario}
+        perfilRuta={perfilPrincipal}
+        onPerfilRuta={setPerfilPrincipal}
         zonas={mostrarZonas}
         onZonas={cambiarZonas}
+        concentraciones={mostrarConcentracionDelitos}
+        onConcentraciones={() => setMostrarConcentracionDelitos((visible) => !visible)}
         delitos={mostrarDelitos}
         onDelitos={() => setMostrarDelitos((visible) => !visible)}
         red={mostrarRed}
@@ -945,8 +1001,8 @@ export default function MapaRiesgo() {
                     style={styles.routeSummary}
                   >
                     Se encontraron{" "}
-                    {ruta?.cantidad_rutas ?? ruta?.rutas?.length ?? 0}{" "}
-                    alternativas. Selecciona una para mostrar solo esa ruta.
+                {ruta?.cantidad_rutas ?? ruta?.rutas?.length ?? 0}{" "}
+                rutas preparadas. Puedes cambiar de recorrido sin volver a calcular.
                   </Text>
                 )}
               {!cargandoRuta &&
@@ -1058,13 +1114,7 @@ export default function MapaRiesgo() {
                       accessibilityRole="button"
                       accessibilityLabel={`Seleccionar ruta ${nombrePerfilRuta(alternativa)}`}
                       accessibilityState={{ selected: seleccionada }}
-                      onPress={() =>
-                        setRutaSeleccionada((actual) =>
-                          actual === alternativa.perfil_ruta
-                            ? null
-                            : alternativa.perfil_ruta,
-                        )
-                      }
+                      onPress={() => setRutaSeleccionada(alternativa.perfil_ruta)}
                       style={[
                         styles.alternativeCard,
                         { borderLeftColor: color },
@@ -1075,6 +1125,9 @@ export default function MapaRiesgo() {
                         <Text style={[styles.alternativeTitle, { color }]}>
                           {nombrePerfilRuta(alternativa)}
                         </Text>
+                        {alternativa.es_ruta_principal && (
+                          <Text style={styles.aiRecommendedBadge}>Principal</Text>
+                        )}
                         {recomendadaPorIA && (
                           <Text style={styles.aiRecommendedBadge}>
                             Recomendada por IA

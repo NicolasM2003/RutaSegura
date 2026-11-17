@@ -1,228 +1,95 @@
 require("dotenv").config();
 
+const { crearIndiceEspacial } = require("../../src/services/riesgo-espacial.service");
 const {
-  proporcionDentroRectangulo,
-  calcularLongitudDentroZona,
   calcularRiesgoSegmento,
-  obtenerLimitesZona,
+  calcularExposicionZonas,
 } = require("../../src/services/riesgo-red.service");
 
-describe("Intersección segmento - zona de riesgo", () => {
-  /*
-   * Zona correspondiente a:
-   * fila -8250
-   * columna -17885
-   *
-   * Límites:
-   * lat: -33.000 a -32.996
-   * lon: -71.540 a -71.536
-   */
-  const zona = {
-    minLat: -33.0,
-    maxLat: -32.996,
-    minLon: -71.54,
-    maxLon: -71.536,
+const crearContexto = (zonas = []) => {
+  const centrosZona = zonas.flatMap((zona) => zona.geometria_zona.centros.map((centro) => ({
+    ...centro,
+    id_zona: zona.id_zona,
+    puntaje: zona.puntajeFinal,
+    nivel: zona.nivel,
+    radio_metros: zona.geometria_zona.radio_metros,
+  })));
+  const vacio = [];
+  return {
+    centrosZona,
+    modelo: {
+      zonas,
+      delitosAislados: vacio,
+      delitosHistoricos: vacio,
+      modoTemporal: "rango_seleccionado",
+      rangoHorario: "20:00 - 23:59",
+      cobertura: { estado: "registros_disponibles" },
+    },
+    indiceCentrosZona: crearIndiceEspacial(centrosZona, 75),
+    indiceAislados: crearIndiceEspacial(vacio, 75),
+    indiceHistorico: crearIndiceEspacial(vacio, 75),
   };
+};
 
-  test("segmento completamente dentro de la zona debe devolver proporción 1", () => {
-    const puntoA = {
-      latitud: -32.9995,
-      longitud: -71.5385,
-    };
+const zona = {
+  id_zona: "temporal:test:1",
+  nivel: "Alto",
+  puntajeFinal: 80,
+  geometria_zona: {
+    tipo: "union_buffers_haversine",
+    radio_metros: 75,
+    centros: [{ id_delito: "d1", latitud: 0, longitud: 0 }],
+  },
+};
 
-    const puntoB = {
-      latitud: -32.998,
-      longitud: -71.5385,
-    };
-
-    const proporcion =
-      proporcionDentroRectangulo(
-        puntoA,
-        puntoB,
-        zona
-      );
-
-    expect(proporcion).toBeCloseTo(1, 4);
+describe("Exposición de una arista a zonas geográficas", () => {
+  test("un tramo dentro del buffer temporal queda totalmente expuesto", () => {
+    const contexto = crearContexto([zona]);
+    const resultado = calcularExposicionZonas([
+      { latitud: 0, longitud: -0.0002 },
+      { latitud: 0, longitud: 0.0002 },
+    ], contexto);
+    expect(resultado.puntaje).toBeCloseTo(80, 1);
+    expect(resultado.zonas[0].proporcion_segmento).toBe(1);
   });
 
-  test("segmento parcialmente dentro de la zona debe devolver una proporción entre 0 y 1", () => {
-    const puntoA = {
-      latitud: -33.003,
-      longitud: -71.5385,
-    };
-
-    const puntoB = {
-      latitud: -32.999,
-      longitud: -71.5385,
-    };
-
-    const proporcion =
-      proporcionDentroRectangulo(
-        puntoA,
-        puntoB,
-        zona
-      );
-
-    expect(proporcion).toBeGreaterThan(0);
-    expect(proporcion).toBeLessThan(1);
-    expect(proporcion).toBeCloseTo(
-      0.25,
-      2
-    );
-  });
-
-  test("segmento completamente fuera de la zona debe devolver proporción 0", () => {
-    const puntoA = {
-      latitud: -33.005,
-      longitud: -71.5385,
-    };
-
-    const puntoB = {
-      latitud: -33.004,
-      longitud: -71.5385,
-    };
-
-    const proporcion =
-      proporcionDentroRectangulo(
-        puntoA,
-        puntoB,
-        zona
-      );
-
-    expect(proporcion).toBe(0);
-  });
-
-  test("el cálculo de longitud dentro de una zona debe devolver un valor entre 0 y 1", () => {
+  test("un cruce parcial pondera por la fracción de longitud expuesta", () => {
+    const contexto = crearContexto([zona]);
     const geometria = [
-      {
-        latitud: -33.003,
-        longitud: -71.5385,
-      },
-      {
-        latitud: -32.999,
-        longitud: -71.5385,
-      },
+      { latitud: 0, longitud: -0.001 },
+      { latitud: 0, longitud: 0.001 },
     ];
-
-    const proporcion =
-      calcularLongitudDentroZona(
-        geometria,
-        zona
-      );
-
-    expect(proporcion).toBeGreaterThanOrEqual(
-      0
-    );
-
-    expect(proporcion).toBeLessThanOrEqual(
-      1
-    );
-
-    expect(proporcion).toBeCloseTo(
-      0.25,
-      2
-    );
+    const exposicion = calcularExposicionZonas(geometria, contexto);
+    const riesgoArista = calcularRiesgoSegmento({ geometria }, contexto);
+    expect(exposicion.zonas[0].proporcion_segmento).toBeGreaterThan(0.65);
+    expect(exposicion.zonas[0].proporcion_segmento).toBeLessThan(0.70);
+    expect(exposicion.puntaje).toBeGreaterThan(52);
+    expect(exposicion.puntaje).toBeLessThan(57);
+    expect(riesgoArista.puntaje_riesgo_temporal).toBeLessThan(80);
+    expect(riesgoArista.puntaje_riesgo_temporal).toBeGreaterThan(35);
   });
 
-  test("segmento que intersecta una zona debe registrar la zona intersectada", () => {
-    const segmento = {
-      geometria: [
-        {
-          latitud: -33.003,
-          longitud: -71.5385,
-        },
-        {
-          latitud: -32.999,
-          longitud: -71.5385,
-        },
-      ],
-    };
-
-    const zonas = [
-      {
-        id_zona: "-8250:-17885",
-        nivel: "Alto",
-        puntajeFinal: 80,
-      },
-    ];
-
-    const resultado =
-      calcularRiesgoSegmento(
-        segmento,
-        zonas
-      );
-
-    expect(
-      resultado.zonasIntersectadas.length
-    ).toBe(1);
-
-    expect(
-      resultado.cantidadZonasIntersectadas
-    ).toBe(1);
-
-    expect(
-      resultado.zonasIntersectadas[0].id_zona
-    ).toBe("-8250:-17885");
-
-    expect(
-      resultado.zonasIntersectadas[0].proporcion
-    ).toBeGreaterThan(0);
-
-    expect(
-      resultado.zonasIntersectadas[0].proporcion
-    ).toBeLessThan(1);
-
-    expect(
-      resultado.puntajeRiesgo
-    ).toBe(80);
-
-    expect(
-      resultado.nivelRiesgo
-    ).toBe("Alto");
+  test("una arista exterior a los buffers no recibe riesgo temporal de zona", () => {
+    const contexto = crearContexto([zona]);
+    const resultado = calcularExposicionZonas([
+      { latitud: 0.002, longitud: -0.0002 },
+      { latitud: 0.002, longitud: 0.0002 },
+    ], contexto);
+    expect(resultado.puntaje).toBe(0);
+    expect(resultado.zonas).toEqual([]);
   });
 
-  test("segmento sin intersección debe devolver riesgo 0", () => {
-    const segmento = {
+  test("el puntaje por arista incluye riesgo temporal e histórico por separado", () => {
+    const resultado = calcularRiesgoSegmento({
       geometria: [
-        {
-          latitud: -33.005,
-          longitud: -71.5385,
-        },
-        {
-          latitud: -33.004,
-          longitud: -71.5385,
-        },
+        { latitud: 0, longitud: -0.0002 },
+        { latitud: 0, longitud: 0.0002 },
       ],
-    };
-
-    const zonas = [
-      {
-        id_zona: "-8250:-17885",
-        nivel: "Alto",
-        puntajeFinal: 80,
-      },
-    ];
-
-    const resultado =
-      calcularRiesgoSegmento(
-        segmento,
-        zonas
-      );
-
-    expect(
-      resultado.zonasIntersectadas
-    ).toEqual([]);
-
-    expect(
-      resultado.cantidadZonasIntersectadas
-    ).toBe(0);
-
-    expect(
-      resultado.puntajeRiesgo
-    ).toBe(0);
-
-    expect(
-      resultado.nivelRiesgo
-    ).toBe("Bajo");
+    }, crearContexto([zona]));
+    expect(resultado.puntaje_riesgo_temporal).toBeGreaterThan(0);
+    expect(resultado.puntaje_riesgo_historico).toBeCloseTo(23.08, 1);
+    expect(resultado.riesgo_historico_es_prior).toBe(true);
+    expect(resultado.puntaje_riesgo).toBeGreaterThan(0);
+    expect(resultado.zonas_intersectadas[0].id_zona).toBe(zona.id_zona);
   });
 });

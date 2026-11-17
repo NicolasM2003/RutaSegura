@@ -23,6 +23,7 @@ type Props = {
 
   comuna: string;
   rangoHorario: string;
+  perfilPrincipal: string;
 
   alElegirModo: (modo: DestinoRuta) => void;
   alReiniciar: () => void;
@@ -30,6 +31,7 @@ type Props = {
 
   alCambiarComuna: (comuna: string) => void;
   alCambiarHorario: (horario: string) => void;
+  alCambiarPerfilPrincipal: (perfil: string) => void;
 
   buscandoUbicacion: boolean;
   estadoUbicacion: string | null;
@@ -309,6 +311,33 @@ export default function UbicacionesMapaWeb(
             )}
           </select>
         </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={etiqueta}>
+          Preferencia de navegación
+        </label>
+        <select
+          aria-label="Preferencia de navegación"
+          value={props.perfilPrincipal}
+          onChange={(event) => props.alCambiarPerfilPrincipal(event.target.value)}
+          style={{
+            width: "100%",
+            minHeight: 40,
+            border: "1px solid #d1d5db",
+            borderRadius: 9,
+            padding: "8px 9px",
+            background: "#ffffff",
+            color: "#111827",
+            fontSize: 12,
+            fontWeight: 700,
+            outline: "none",
+          }}
+        >
+          <option value="menor_riesgo">Seguro · 10 % distancia / 90 % riesgo</option>
+          <option value="equilibrada">Equilibrado · 50 % distancia / 50 % riesgo</option>
+          <option value="mas_rapida">Rápido · 90 % distancia / 10 % riesgo</option>
+        </select>
       </div>
 
       {/* ORIGEN / DESTINO */}
