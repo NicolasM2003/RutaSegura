@@ -30,19 +30,15 @@
       "expo-dev-client",
       "expo-location",
       [
-        "react-native-maps",
-        {
-          "androidGoogleMapsApiKey": "AIzaSyDfsd9y_xh5NeuqLOGY6wXEXmcxtIFtGWU"
-        }
-      ],
-      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
