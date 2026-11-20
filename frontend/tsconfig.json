@@ -16,5 +16,8 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-, "tests/unitarias/horario.test.js"  ]
+  ],
+  "exclude": [
+    "tests"
+  ]
 }

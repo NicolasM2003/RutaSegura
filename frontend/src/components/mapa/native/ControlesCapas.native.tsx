@@ -43,6 +43,7 @@ function OpcionCapa({
         <Text style={styles.layerTitle}>{titulo}</Text>
         <Text style={styles.layerDescription}>{descripcion}</Text>
       </View>
+
       <Switch
         value={valor}
         onValueChange={onCambiar}
@@ -72,35 +73,42 @@ export default function ControlesCapas({
 
   return (
     <>
-      <View style={[styles.floatingActions, { top: insets.top + 82 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Usar mi ubicación actual como origen"
-          disabled={cargandoUbicacion}
-          onPress={onSolicitarUbicacion}
-          style={({ pressed }) => [
-            styles.floatingButton,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={styles.locationGlyph}>
-            {cargandoUbicacion ? "…" : "◎"}
-          </Text>
-        </Pressable>
+      {/* BARRA INFERIOR */}
+      <View
+  style={[
+    styles.floatingActions,
+    { top: insets.top + 78 },
+  ]}
+>
+  <Pressable
+    accessibilityRole="button"
+    accessibilityLabel="Usar mi ubicación actual"
+    disabled={cargandoUbicacion}
+    onPress={onSolicitarUbicacion}
+    style={({ pressed }) => [
+      styles.floatingButton,
+      pressed && styles.pressed,
+    ]}
+  >
+    <Text style={styles.locationGlyph}>
+      {cargandoUbicacion ? "…" : "◎"}
+    </Text>
+  </Pressable>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Configurar capas del mapa"
-          onPress={() => setAbierto(true)}
-          style={({ pressed }) => [
-            styles.floatingButton,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={styles.layersGlyph}>▱</Text>
-        </Pressable>
-      </View>
+  <Pressable
+    accessibilityRole="button"
+    accessibilityLabel="Configurar capas del mapa"
+    onPress={() => setAbierto(true)}
+    style={({ pressed }) => [
+      styles.floatingButton,
+      pressed && styles.pressed,
+    ]}
+  >
+    <Text style={styles.layersGlyph}>▱</Text>
+  </Pressable>
+</View>
 
+      {/* MODAL DE CAPAS */}
       <Modal
         visible={abierto}
         transparent
@@ -120,6 +128,7 @@ export default function ControlesCapas({
                 <Text style={styles.modalEyebrow}>
                   PERSONALIZA EL MAPA
                 </Text>
+
                 <Text style={styles.modalTitle}>
                   Capas de información
                 </Text>
@@ -183,39 +192,18 @@ export default function ControlesCapas({
               </Text>
 
               <View style={styles.legendItem}>
-                <View
-                  style={[
-                    styles.dot,
-                    { backgroundColor: "#16A34A" },
-                  ]}
-                />
-                <Text style={styles.legendText}>
-                  1 delito: verde
-                </Text>
+                <View style={[styles.dot, { backgroundColor: "#16A34A" }]} />
+                <Text style={styles.legendText}>1 delito: verde</Text>
               </View>
 
               <View style={styles.legendItem}>
-                <View
-                  style={[
-                    styles.dot,
-                    { backgroundColor: "#FACC15" },
-                  ]}
-                />
-                <Text style={styles.legendText}>
-                  2 delitos: amarillo
-                </Text>
+                <View style={[styles.dot, { backgroundColor: "#FACC15" }]} />
+                <Text style={styles.legendText}>2 delitos: amarillo</Text>
               </View>
 
               <View style={styles.legendItem}>
-                <View
-                  style={[
-                    styles.dot,
-                    { backgroundColor: "#DC2626" },
-                  ]}
-                />
-                <Text style={styles.legendText}>
-                  3 o más delitos: rojo
-                </Text>
+                <View style={[styles.dot, { backgroundColor: "#DC2626" }]} />
+                <Text style={styles.legendText}>3 o más delitos: rojo</Text>
               </View>
 
               <Text style={styles.legendNote}>
@@ -239,39 +227,59 @@ export default function ControlesCapas({
 
 const styles = StyleSheet.create({
   floatingActions: {
-    position: "absolute",
-    right: 14,
-    zIndex: 18,
-    gap: 9,
-  },
-  floatingButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+  position: "absolute",
+  right: 13,
+  zIndex: 30,
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 9,
+},
+floatingButton: {
+  width: 46,
+  height: 46,
+  borderRadius: 15,
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "#FFFFFF",
+  borderWidth: 1,
+  borderColor: "#DCE8E0",
+  elevation: 8,
+  shadowColor: "#173D35",
+  shadowOpacity: 0.14,
+  shadowRadius: 7,
+  shadowOffset: { width: 0, height: 3 },
+},
+  dockButton: {
+    flex: 1,
+    minHeight: 46,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-    elevation: 6,
-    shadowColor: "#173D35",
-    shadowOpacity: 0.14,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 3 },
+    gap: 8,
+    borderRadius: 13,
+    backgroundColor: "#F1F6F2",
+  },
+  dockLabel: {
+    color: "#174B41",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  disabledButton: {
+    opacity: 0.55,
   },
   pressed: {
     opacity: 0.72,
-    transform: [{ scale: 0.97 }],
+    transform: [{ scale: 0.98 }],
   },
   locationGlyph: {
     color: "#174B41",
-    fontSize: 27,
+    fontSize: 22,
     fontWeight: "700",
-    lineHeight: 31,
   },
   layersGlyph: {
     color: "#174B41",
-    fontSize: 29,
+    fontSize: 24,
     fontWeight: "700",
-    lineHeight: 32,
   },
   backdrop: {
     flex: 1,

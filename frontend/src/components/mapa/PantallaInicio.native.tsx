@@ -71,7 +71,7 @@ export default function PantallaInicio({
         <View style={styles.header}>
           <View style={styles.logo}>
             <Image
-              source={require("../../assets/logo-rutasegura-icon.png")}
+              source={require("../../assets/images/logo-rutasegura-icon.png")}
               style={styles.logoImage}
               resizeMode="contain"
             />

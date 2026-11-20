@@ -41,6 +41,7 @@ type Props = {
   destino: Punto | null;
   modoSeleccion: "origen" | "destino" | null;
   instruccionRuta: string;
+  infoMapa?: ReactNode;
   onElegirOrigen: () => void;
   onElegirDestino: () => void;
   onCambiarPuntos: () => void;
@@ -51,9 +52,12 @@ type Props = {
   perfilRuta: string;
   onPerfilRuta: (value: string) => void;
   cargando: boolean;
+  cargandoRuta: boolean;
+  resultadoDisponible: boolean;
   error: string | null;
   estadoUbicacion: string | null;
   cargandoUbicacion: boolean;
+  // Se conserva para compatibilidad con el padre; la acción vive en ControlesCapas.
   onSolicitarUbicacion: () => void;
   zonaOrigenMensaje?: string | null;
   zonaDestinoMensaje?: string | null;
@@ -68,7 +72,7 @@ type Props = {
   children?: ReactNode;
 };
 
-type Selector = "comuna" | "horario" | null;
+type Selector = "comuna" | "horario" | "perfil" | null;
 
 export default function ControlesMapa({
   origen,
@@ -85,10 +89,12 @@ export default function ControlesMapa({
   perfilRuta,
   onPerfilRuta,
   cargando,
+  cargandoRuta,
+  resultadoDisponible,
+  infoMapa,
   error,
   estadoUbicacion,
   cargandoUbicacion,
-  onSolicitarUbicacion,
   zonaOrigenMensaje,
   zonaDestinoMensaje,
   onBuscarDireccion,
@@ -97,37 +103,81 @@ export default function ControlesMapa({
 }: Props) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const modoResultados = Boolean(origen && destino);
 
-  const alturaReducida = Math.min(Math.max(height * 0.59, 405), 570);
-  const alturaExpandida = Math.min(
-    Math.max(height * 0.84, alturaReducida),
-    760,
-  );
+const [expandido, setExpandido] = useState(false);
+const alturaPanel = useRef(new Animated.Value(104)).current;
 
-  const [expandido, setExpandido] = useState(false);
-  const alturaPanel = useRef(new Animated.Value(alturaReducida)).current;
+const [selector, setSelector] = useState<Selector>(null);
+const [direccionAbierta, setDireccionAbierta] = useState(false);
+const [destinoDireccion, setDestinoDireccion] =
+  useState<DestinoRuta>("origen");
 
-  const [selector, setSelector] = useState<Selector>(null);
-  const [direccionAbierta, setDireccionAbierta] = useState(false);
-  const [destinoDireccion, setDestinoDireccion] =
-    useState<DestinoRuta>("origen");
+const [consultaDireccion, setConsultaDireccion] = useState("");
+const [resultadosDireccion, setResultadosDireccion] =
+  useState<ResultadoDireccion[]>([]);
 
-  const [consultaDireccion, setConsultaDireccion] = useState("");
-  const [resultadosDireccion, setResultadosDireccion] =
-    useState<ResultadoDireccion[]>([]);
+const [buscandoDireccion, setBuscandoDireccion] = useState(false);
+const [errorDireccion, setErrorDireccion] = useState<string | null>(null);
 
-  const [buscandoDireccion, setBuscandoDireccion] = useState(false);
-  const [errorDireccion, setErrorDireccion] = useState<string | null>(null);
+// Espacio reservado para la barra inferior de ubicación y capas.
+const bottomDock = Math.max(insets.bottom, 8) + 12;
 
-  useEffect(() => {
-    Animated.spring(alturaPanel, {
-      toValue: expandido ? alturaExpandida : alturaReducida,
-      useNativeDriver: false,
-      damping: 24,
-      stiffness: 170,
-      mass: 0.9,
-    }).start();
-  }, [alturaPanel, alturaExpandida, alturaReducida, expandido]);
+// Altura disponible para el planificador abierto.
+const alturaPlanificador = Math.min(
+  Math.max(height * 0.72, 350),
+  Math.max(height - insets.top - bottomDock - 12, 350),
+);
+
+// La vista de resultados ocupa casi toda la pantalla.
+// El panel de resultados ocupa aproximadamente el 62%
+// de la pantalla, dejando más mapa visible en la parte superior.
+const alturaMaximaResultados = Math.max(
+  height - insets.top - insets.bottom - 18,
+  300,
+);
+
+const alturaExpandida = modoResultados
+  ? Math.min(
+      Math.max(height * 0.62, 350),
+      alturaMaximaResultados,
+    )
+  : alturaPlanificador;
+
+// Al tener ambos puntos, mostrar automáticamente el resultado.
+// También contempla respuestas de error.
+useEffect(() => {
+  if (!modoResultados) {
+    setExpandido(false);
+    return;
+  }
+
+  if (cargandoRuta || resultadoDisponible) {
+    setExpandido(true);
+  }
+}, [modoResultados, cargandoRuta, resultadoDisponible]);
+
+// Al seleccionar origen o destino, liberar el mapa automáticamente.
+useEffect(() => {
+  if (modoSeleccion !== null && !modoResultados) {
+    setExpandido(false);
+  }
+}, [modoSeleccion, modoResultados]);
+
+const bottomPanel =
+  modoResultados && expandido
+    ? Math.max(insets.bottom, - 26, 0)
+    : bottomDock;
+
+useEffect(() => {
+  Animated.spring(alturaPanel, {
+    toValue: expandido ? alturaExpandida : 104,
+    useNativeDriver: false,
+    damping: 24,
+    stiffness: 170,
+    mass: 0.9,
+  }).start();
+}, [alturaPanel, alturaExpandida, expandido]);
 
   const panResponder = useMemo(
     () =>
@@ -148,18 +198,25 @@ export default function ControlesMapa({
   const opciones =
     selector === "comuna"
       ? ["Sin filtro", ...COMUNAS]
-      : RANGOS_HORARIOS;
+      : selector === "perfil"
+        ? PERFILES.map((perfil) => perfil.label)
+        : RANGOS_HORARIOS;
 
   const seleccionado =
     selector === "comuna"
       ? comuna ?? "Sin filtro"
-      : horario;
+      : selector === "perfil"
+        ? PERFILES.find((p) => p.value === perfilRuta)?.label ?? "Más segura"
+        : horario;
 
   const elegirOpcion = (value: string) => {
     if (selector === "comuna") {
       onComuna(value === "Sin filtro" ? null : value);
     } else if (selector === "horario") {
       onHorario(value);
+    } else if (selector === "perfil") {
+      const perfil = PERFILES.find((p) => p.label === value);
+      if (perfil) onPerfilRuta(perfil.value);
     }
 
     setSelector(null);
@@ -206,6 +263,16 @@ export default function ControlesMapa({
     setDireccionAbierta(true);
   };
 
+  const handleNuevaRuta = () => {
+    setExpandido(false);
+    setSelector(null);
+    setDireccionAbierta(false);
+    setConsultaDireccion("");
+    setResultadosDireccion([]);
+    setErrorDireccion(null);
+    onCambiarPuntos();
+  };
+
   const filtro = (
     label: string,
     value: string,
@@ -223,13 +290,90 @@ export default function ControlesMapa({
     </Pressable>
   );
 
+  const estadoContraido = modoResultados
+  ? cargandoRuta
+    ? {
+        eyebrow: "CALCULANDO",
+        titulo: "Buscando tu ruta",
+        descripcion: "Estamos comparando los recorridos disponibles.",
+      }
+    : {
+        eyebrow: "TU RECORRIDO",
+        titulo: "Tu ruta está lista",
+        descripcion: "Toca para consultar el resultado y sus alternativas.",
+      }
+  : modoSeleccion === "origen"
+    ? {
+        eyebrow: "SELECCIONA EN EL MAPA",
+        titulo: "Marca el origen",
+        descripcion: "Toca el mapa para indicar dónde comienza tu recorrido.",
+      }
+    : modoSeleccion === "destino"
+      ? {
+          eyebrow: "SELECCIONA EN EL MAPA",
+          titulo: "Marca el destino",
+          descripcion: "Toca el mapa para completar tu recorrido.",
+        }
+      : origen
+        ? {
+            eyebrow: "PLANIFICADOR PEATONAL",
+            titulo: "Origen seleccionado",
+            descripcion: "Abre el planificador para cambiar los puntos.",
+          }
+        : {
+            eyebrow: "PLANIFICADOR PEATONAL",
+            titulo: "¿A dónde quieres ir?",
+            descripcion: "Toca aquí para planificar tu recorrido.",
+          };
+
+  if (!expandido) {
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.collapsedContainer,
+        {
+          bottom: Math.max(insets.bottom, 8) + 12,
+        },
+      ]}
+    >
+      {infoMapa && (
+        <View style={styles.collapsedInfo}>
+          {infoMapa}
+        </View>
+      )}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Abrir planificador de ruta"
+        onPress={() => setExpandido(true)}
+        style={styles.collapsedPlanner}
+      >
+        <Text style={styles.eyebrow}>
+          {estadoContraido.eyebrow}
+        </Text>
+
+        <Text style={styles.collapsedTitle}>
+          {estadoContraido.titulo}
+        </Text>
+
+        <Text style={styles.collapsedSubtitle}>
+          {estadoContraido.descripcion}
+        </Text>
+
+                <Text style={styles.collapsedArrow}>⌃</Text>
+              </Pressable>
+            </View>
+          );
+        }
+
   return (
     <Animated.View
       style={[
         styles.sheet,
         {
           height: alturaPanel,
-          bottom: Math.max(insets.bottom, 8),
+          bottom: bottomPanel,
         },
       ]}
     >
@@ -239,7 +383,7 @@ export default function ControlesMapa({
           accessibilityLabel={
             expandido ? "Contraer panel" : "Expandir panel"
           }
-          onPress={() => setExpandido((value) => !value)}
+          onPress={() => setExpandido(false)}
           style={styles.dragPressable}
         >
           <View style={styles.dragHandle} />
@@ -253,7 +397,14 @@ export default function ControlesMapa({
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
       >
-        <View style={styles.headingRow}>
+        {infoMapa && (
+          <View style={styles.expandedMapInfo}>
+            {infoMapa}
+          </View>
+        )}
+        {!modoResultados && (
+          <>
+            <View style={styles.headingRow}>
           <View style={styles.headingCopy}>
             <Text style={styles.eyebrow}>
               PLANIFICADOR PEATONAL
@@ -384,26 +535,9 @@ export default function ControlesMapa({
           </View>
         )}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: false }}
-          disabled={cargandoUbicacion}
-          onPress={onSolicitarUbicacion}
-          style={[
-            styles.locationAction,
-            cargandoUbicacion && styles.pointInputDisabled,
-          ]}
-        >
-          <Text style={styles.locationGlyph}>◎</Text>
-
-          <Text style={styles.locationActionText}>
-            {cargandoUbicacion
-              ? "Obteniendo ubicación…"
-              : "Usar mi ubicación actual"}
-          </Text>
-
-          <Text style={styles.locationArrow}>→</Text>
-        </Pressable>
+        {cargandoUbicacion && (
+          <Text style={styles.statusText}>Obteniendo ubicación actual…</Text>
+        )}
 
         <View style={styles.preferencesHeader}>
           <Text style={styles.preferencesTitle}>
@@ -430,33 +564,29 @@ export default function ControlesMapa({
             PREFERENCIA DE RUTA
           </Text>
 
-          <View style={styles.profileOptions}>
-            {PERFILES.map((perfil) => {
-              const activo = perfilRuta === perfil.value;
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSelector("perfil")}
+            style={styles.profileSelected}
+          >
+            <View style={styles.profileSelectedIndicator}>
+              <Text style={styles.profileSelectedCheck}>✓</Text>
+            </View>
 
-              return (
-                <Pressable
-                  key={perfil.value}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: activo }}
-                  onPress={() => onPerfilRuta(perfil.value)}
-                  style={[
-                    styles.profileButton,
-                    activo && styles.profileButtonActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.profileButtonText,
-                      activo && styles.profileButtonTextActive,
-                    ]}
-                  >
-                    {perfil.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+            <View style={styles.profileSelectedCopy}>
+              <Text style={styles.profileSelectedLabel}>
+                Ruta seleccionada
+              </Text>
+
+              <Text style={styles.profileSelectedValue}>
+                {PERFILES.find((p) => p.value === perfilRuta)?.label ?? "Más segura"}
+              </Text>
+            </View>
+
+            <Text style={styles.profileSelectedAction}>
+              Cambiar⌄
+            </Text>
+          </Pressable>
         </View>
 
         {!!instruccionRuta && (
@@ -487,31 +617,39 @@ export default function ControlesMapa({
           </Text>
         )}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{
-            disabled: !origen || !destino,
-          }}
-          disabled={!origen || !destino}
-          onPress={() => setExpandido(true)}
-          style={[
-            styles.primaryButton,
-            (!origen || !destino) &&
-              styles.primaryButtonDisabled,
-          ]}
-        >
-          <Text style={styles.primaryButtonGlyph}>✦</Text>
 
-          <Text style={styles.primaryButtonText}>
-            {origen && destino
-              ? "Ver rutas seguras"
-              : "Selecciona origen y destino"}
-          </Text>
+          </>
+        )}
+        
+        {modoResultados && (
+          <>
+            <View style={styles.resultModeHeader}>
+              <View style={styles.resultModeCopy}>
+                <Text style={styles.resultModeEyebrow}>RECORRIDO ACTUAL</Text>
+                <Text style={styles.resultModeTitle}>Tu ruta</Text>
+                <Text style={styles.resultModeSubtitle}>
+                  {PERFILES.find((perfil) => perfil.value === perfilRuta)?.label ?? "Más segura"}
+                  {" · "}Selecciona una alternativa para verla en el mapa.
+                </Text>
+              </View>
 
-          <Text style={styles.primaryButtonArrow}>→</Text>
-        </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Eliminar ruta y comenzar una nueva"
+                onPress={handleNuevaRuta}
+                style={({ pressed }) => [
+                  styles.resetButton,
+                  pressed && styles.resetButtonPressed,
+                ]}
+              >
+                <Text style={styles.resetButtonGlyph}>↻</Text>
+                <Text style={styles.resetButtonText}>Nueva ruta</Text>
+              </Pressable>
+            </View>
 
-        {children}
+            {children}
+          </>
+        )}
       </ScrollView>
 
       <Modal
@@ -531,7 +669,9 @@ export default function ControlesMapa({
             <Text style={styles.modalTitle}>
               {selector === "comuna"
                 ? "Seleccionar comuna"
-                : "Filtrar por horario"}
+                : selector === "perfil"
+                  ? "Seleccionar preferencia de ruta"
+                  : "Filtrar por horario"}
             </Text>
 
             {opciones.map((opcion) => (
@@ -701,17 +841,70 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 7,
     right: 7,
-    zIndex: 15,
+    zIndex: 35,
     overflow: "hidden",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     backgroundColor: "#FFFEFA",
-    elevation: 18,
+    elevation: 28,
     shadowColor: "#102F28",
     shadowOpacity: 0.18,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: -4 },
   },
+  collapsedPlanner: {
+    minHeight: 84,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#E3EAE4",
+    backgroundColor: "#DFEBE4",
+    elevation: 16,
+    shadowColor: "#102F28",
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  collapsedCopy: {
+    flex: 1,
+    justifyContent: "center",
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 13,
+    backgroundColor: "#FFFFFF",
+  },
+  collapsedContainer: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    zIndex: 25,
+    gap: 10,
+  },
+  collapsedInfo: {
+    width: "100%",
+  },
+  expandedMapInfo: {
+    width: "100%",
+    marginBottom: 12,
+  },
+  collapsedTitle: {
+    color: "#173F39",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  collapsedSubtitle: {
+    color: "#83918A",
+    fontSize: 11,
+  },
+  collapsedArrow: {
+    color: "#008748",
+    fontSize: 23,
+    fontWeight: "900",
+    paddingHorizontal: 10,
+},
   dragArea: {
     height: 25,
     alignItems: "center",
@@ -735,7 +928,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 17,
     paddingTop: 4,
-    paddingBottom: 26,
+    paddingBottom: 18,
   },
   headingRow: {
     flexDirection: "row",
@@ -795,6 +988,108 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingTop: 23,
     paddingBottom: 22,
+  },
+  profileSelected: {
+    minHeight: 53,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DCE8E0",
+    borderRadius: 13,
+  },
+profileSelectedIndicator: {
+  width: 30,
+  height: 30,
+  borderRadius: 10,
+  backgroundColor: "#E4F2EB",
+  alignItems: "center",
+  justifyContent: "center",
+},
+profileSelectedCheck: {
+  color: "#008748",
+  fontSize: 16,
+  fontWeight: "900",
+},
+profileSelectedCopy: {
+  flex: 1,
+  gap: 2,
+},
+profileSelectedLabel: {
+  color: "#89968F",
+  fontSize: 9,
+  fontWeight: "700",
+},
+
+profileSelectedValue: {
+  color: "#173F39",
+  fontSize: 12,
+  fontWeight: "900",
+},
+
+  profileSelectedAction: {
+    color: "#008748",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  resultModeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingHorizontal: 3,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E8EEEB",
+  },
+  resultModeCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  resultModeEyebrow: {
+    color: "#16836C",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  resultModeTitle: {
+    color: "#173F39",
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: "900",
+  },
+  resultModeSubtitle: {
+    color: "#819087",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  resetButton: {
+    minHeight: 40,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    borderRadius: 12,
+    backgroundColor: "#FCEFEB",
+    borderWidth: 1,
+    borderColor: "#F3D6CF",
+  },
+  resetButtonPressed: {
+    opacity: 0.72,
+  },
+  resetButtonGlyph: {
+    color: "#B84C3D",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  resetButtonText: {
+    color: "#B84C3D",
+    fontSize: 10,
+    fontWeight: "900",
   },
   originDot: {
     width: 9,
@@ -898,34 +1193,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
   },
-  locationAction: {
-    minHeight: 42,
-    marginTop: 10,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderRadius: 12,
-    backgroundColor: "#E7F3EE",
-    borderWidth: 1,
-    borderColor: "#D0E7DC",
-  },
-  locationGlyph: {
-    color: "#177A65",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  locationActionText: {
-    flex: 1,
-    color: "#227E68",
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  locationArrow: {
-    color: "#227E68",
-    fontSize: 19,
-    fontWeight: "700",
-  },
   preferencesHeader: {
     marginTop: 17,
     marginBottom: 8,
@@ -970,34 +1237,6 @@ const styles = StyleSheet.create({
     marginTop: 11,
     gap: 7,
   },
-  profileOptions: {
-    flexDirection: "row",
-    gap: 6,
-  },
-  profileButton: {
-    flex: 1,
-    minHeight: 38,
-    paddingHorizontal: 5,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 10,
-    backgroundColor: "#F0F1EB",
-    borderWidth: 1,
-    borderColor: "#EBECE5",
-  },
-  profileButtonActive: {
-    backgroundColor: "#F4D65D",
-    borderColor: "#F4D65D",
-  },
-  profileButtonText: {
-    color: "#67786F",
-    fontSize: 10,
-    fontWeight: "700",
-  },
-  profileButtonTextActive: {
-    color: "#4B4A30",
-    fontWeight: "900",
-  },
   instruction: {
     marginTop: 10,
     color: "#8A9690",
@@ -1015,43 +1254,6 @@ const styles = StyleSheet.create({
     color: "#B84C3D",
     fontSize: 10,
     lineHeight: 15,
-  },
-  primaryButton: {
-    minHeight: 48,
-    marginTop: 14,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 9,
-    borderRadius: 14,
-    backgroundColor: "#174B41",
-    elevation: 4,
-    shadowColor: "#143F36",
-    shadowOpacity: 0.14,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  primaryButtonDisabled: {
-    backgroundColor: "#A8B8B0",
-    elevation: 0,
-  },
-  primaryButtonGlyph: {
-    color: "#D8EBCF",
-    fontSize: 17,
-    fontWeight: "800",
-  },
-  primaryButtonText: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "900",
-    textAlign: "center",
-  },
-  primaryButtonArrow: {
-    color: "#FFFFFF",
-    fontSize: 19,
-    fontWeight: "700",
   },
   backdrop: {
     flex: 1,

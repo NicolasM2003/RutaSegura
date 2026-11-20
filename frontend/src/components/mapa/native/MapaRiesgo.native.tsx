@@ -13,7 +13,6 @@ import MapView, {
   Polyline,
   type Region,
 } from "react-native-maps";
-
 import ControlesMapa, {
   RANGOS_HORARIOS,
 } from "./ControlesMapa.native";
@@ -274,10 +273,33 @@ function FichaElemento({
           ? "Concentración de delitos"
           : "Segmento peatonal";
 
+  const esZona = elemento.tipo === "zona";
+  const nivelZona = esZona
+    ? valor(elemento.datos.nivel, "No informado")
+    : "";
+  const colorNivel =
+    nivelZona.toLowerCase() === "alto"
+      ? "#B93832"
+      : nivelZona.toLowerCase() === "medio"
+        ? "#A76A0A"
+        : "#14765B";
+
   return (
-    <View style={styles.infoCard}>
+    <View style={[styles.infoCard, esZona && styles.zoneInfoCard]}>
       <View style={styles.infoHeader}>
-        <Text style={styles.infoTitle}>{title}</Text>
+        <View style={styles.infoHeadingCopy}>
+          <Text style={styles.infoEyebrow}>DETALLE DEL MAPA</Text>
+          <Text style={styles.infoTitle}>{title}</Text>
+        </View>
+
+        {esZona && (
+          <View style={[styles.levelBadge, { backgroundColor: `${colorNivel}14` }]}>
+            <View style={[styles.levelDot, { backgroundColor: colorNivel }]} />
+            <Text style={[styles.levelBadgeText, { color: colorNivel }]}>
+              {nivelZona}
+            </Text>
+          </View>
+        )}
 
         <Pressable
           accessibilityRole="button"
@@ -289,12 +311,31 @@ function FichaElemento({
         </Pressable>
       </View>
 
-      {fields.map(([label, content]) => (
-        <Text key={label} style={styles.infoLine}>
-          <Text style={styles.infoLabel}>{label}: </Text>
-          {valor(content)}
-        </Text>
-      ))}
+      {esZona ? (
+        <>
+          <View style={styles.zoneStatsGrid}>
+            {fields.slice(0, 4).map(([label, content]) => (
+              <View key={label} style={styles.zoneStat}>
+                <Text style={styles.zoneStatLabel}>{label}</Text>
+                <Text numberOfLines={1} style={styles.zoneStatValue}>
+                  {valor(content)}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <Text numberOfLines={1} style={styles.zoneMethod}>
+            <Text style={styles.infoLabel}>Agrupación · </Text>
+            {valor(fields[4]?.[1])}
+          </Text>
+        </>
+      ) : (
+        fields.map(([label, content]) => (
+          <Text key={label} style={styles.infoLine}>
+            <Text style={styles.infoLabel}>{label}: </Text>
+            {valor(content)}
+          </Text>
+        ))
+      )}
 
       {elemento.tipo === "concentracion" && (
         <>
@@ -328,7 +369,6 @@ export default function MapaRiesgo({
   perfilInicial?: PerfilRuta;
 }){
   const mapRef = useRef<MapView>(null);
-
   const redAbort = useRef<AbortController | null>(null);
   const redConsultaKey = useRef<string | null>(null);
   const cargaId = useRef(0);
@@ -1195,6 +1235,8 @@ export default function MapaRiesgo({
         perfilRuta={perfilPrincipal}
         onPerfilRuta={setPerfilPrincipal}
         cargando={cargando || cargandoRed}
+        cargandoRuta={cargandoRuta}
+        resultadoDisponible={Boolean(ruta) || Boolean(errorRuta)}
         error={error}
         estadoUbicacion={estadoUbicacion}
         cargandoUbicacion={cargandoUbicacion}
@@ -1211,6 +1253,14 @@ export default function MapaRiesgo({
         }
         onBuscarDireccion={buscarDireccion}
         onSeleccionarDireccion={seleccionarDireccion}
+        infoMapa={
+          seleccion ? (
+            <FichaElemento
+              elemento={seleccion}
+              cerrar={() => setSeleccion(null)}
+            />
+          ) : null
+        }
       >
         <PanelResultados
           origenCompleto={Boolean(origen && destino)}
@@ -1246,14 +1296,6 @@ export default function MapaRiesgo({
         </View>
       )}
 
-      {seleccion && (
-        <View style={styles.infoCardPosition}>
-          <FichaElemento
-            elemento={seleccion}
-            cerrar={() => setSeleccion(null)}
-          />
-        </View>
-      )}
     </View>
   );
 }
@@ -1272,48 +1314,121 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     elevation: 3,
   },
-  infoCardPosition: {
-    position: "absolute",
-    top: 148,
-    left: 12,
-    right: 12,
-    zIndex: 25,
-  },
   infoCard: {
-    maxHeight: "36%",
-    backgroundColor: "white",
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 14,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
+  maxHeight: 360,
+  backgroundColor: "#FFFFFF",
+  opacity: 1,
+  borderRadius: 16,
+  borderWidth: 1,
+  borderColor: "#DCE7E0",
+  paddingHorizontal: 14,
+  paddingTop: 12,
+  paddingBottom: 14,
+  elevation: 20,
+  shadowColor: "#000000",
+  shadowOpacity: 0.18,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 4 },
   },
   infoHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "flex-start",
     alignItems: "center",
-    marginBottom: 5,
+    gap: 8,
+    marginBottom: 9,
+  },
+  infoHeadingCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  infoEyebrow: {
+    color: "#72847A",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 1,
   },
   infoTitle: {
-    color: "#111827",
-    fontWeight: "700",
-    fontSize: 16,
+    color: "#173F39",
+    fontWeight: "900",
+    fontSize: 15,
+  },
+  levelBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 20,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  levelDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  levelBadgeText: {
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  zoneInfoCard: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderRadius: 18,
+    borderColor: "#DCE8E0",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 18,
+  },
+  zoneStatsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  zoneStat: {
+    width: "48%",
+    minHeight: 43,
+    justifyContent: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 11,
+    backgroundColor: "#F3F7F4",
+    borderWidth: 1,
+    borderColor: "#E7EEE8",
+  },
+  zoneStatLabel: {
+    color: "#77877D",
+    fontSize: 8,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  zoneStatValue: {
+    color: "#23483E",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  zoneMethod: {
+    color: "#65776D",
+    fontSize: 9,
+    marginTop: 8,
   },
   close: {
-    color: "#374151",
-    fontSize: 26,
-    lineHeight: 28,
+    color: "#426257",
+    fontSize: 22,
+    lineHeight: 24,
+    textAlign: "center",
+    width: 30,
+    height: 30,
+    overflow: "hidden",
+    borderRadius: 15,
+    backgroundColor: "#F0F5F1",
   },
   infoLine: {
-    color: "#374151",
+    color: "#344D43",
     fontSize: 13,
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
   infoLabel: {
-    fontWeight: "700",
-    color: "#111827",
+    fontWeight: "800",
+    color: "#173F39",
   },
 });
