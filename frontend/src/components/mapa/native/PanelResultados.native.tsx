@@ -121,6 +121,11 @@ export default function PanelResultados({
   const interpretacion = resultado?.interpretacion_ia;
 
   const [pasoCalculo, setPasoCalculo] = useState(0);
+  const [mostrarAnalisis, setMostrarAnalisis] = useState(false);
+
+  useEffect(() => {
+  setMostrarAnalisis(false);
+}, [rutaSeleccionada]);
 
   useEffect(() => {
     if (!cargando) {
@@ -419,68 +424,83 @@ export default function PanelResultados({
             </View>
           </View>
 
-          {/* RECOMENDACIÓN DE RUTASEGURA: SIEMPRE VISIBLE */}
-          {interpretacion?.disponible === true &&
-            tieneDetalleIA && (
-              <View style={styles.aiCard}>
-                <View style={styles.aiHeader}>
-                  <View style={styles.aiIcon}>
-                    <Text style={styles.aiIconText}>
-                      ✦
-                    </Text>
-                  </View>
+          {/* RECOMENDACIÓN DE RUTASEGURA DESPLEGABLE */}
+{interpretacion?.disponible === true &&
+  tieneDetalleIA && (
+    <View style={styles.aiCard}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{
+          expanded: mostrarAnalisis,
+        }}
+        onPress={() =>
+          setMostrarAnalisis((actual) => !actual)
+        }
+        style={styles.aiHeader}
+      >
+        <View style={styles.aiIcon}>
+          <Text style={styles.aiIconText}>✦</Text>
+        </View>
 
-                  <View style={styles.aiHeaderCopy}>
-                    <Text style={styles.aiEyebrow}>
-                      ANÁLISIS INTELIGENTE
-                    </Text>
+        <View style={styles.aiHeaderCopy}>
+          <Text style={styles.aiEyebrow}>
+            ANÁLISIS INTELIGENTE
+          </Text>
 
-                    <Text style={styles.aiTitle}>
-                      Recomendación de RutaSegura
-                    </Text>
-                  </View>
-                </View>
+          <Text style={styles.aiTitle}>
+            Recomendación de RutaSegura
+          </Text>
+        </View>
 
-                {!!interpretacion.recomendacion?.motivo && (
-                  <Text style={styles.aiBody}>
-                    {interpretacion.recomendacion.motivo}
+        <Text style={styles.analysisArrow}>
+          {mostrarAnalisis ? "⌃" : "⌄"}
+        </Text>
+      </Pressable>
+
+      {mostrarAnalisis && (
+        <>
+          {!!interpretacion.recomendacion?.motivo && (
+            <Text style={styles.aiBody}>
+              {interpretacion.recomendacion.motivo}
+            </Text>
+          )}
+
+          {!!interpretacion.resumen_general && (
+            <Text style={styles.aiBody}>
+              {interpretacion.resumen_general}
+            </Text>
+          )}
+
+          {!!comparacionActual?.explicacion && (
+            <View style={styles.comparison}>
+              <Text style={styles.comparisonTitle}>
+                Sobre esta alternativa
+              </Text>
+
+              <Text style={styles.aiBody}>
+                {comparacionActual.explicacion}
+              </Text>
+            </View>
+          )}
+
+          {!!interpretacion.consideraciones?.length && (
+            <View style={styles.considerations}>
+              {interpretacion.consideraciones.map(
+                (item, index) => (
+                  <Text
+                    key={`${index}-${item}`}
+                    style={styles.considerationText}
+                  >
+                    • {item}
                   </Text>
-                )}
-
-                {!!interpretacion.resumen_general && (
-                  <Text style={styles.aiBody}>
-                    {interpretacion.resumen_general}
-                  </Text>
-                )}
-
-                {!!comparacionActual?.explicacion && (
-                  <View style={styles.comparison}>
-                    <Text style={styles.comparisonTitle}>
-                      Sobre esta alternativa
-                    </Text>
-
-                    <Text style={styles.aiBody}>
-                      {comparacionActual.explicacion}
-                    </Text>
-                  </View>
-                )}
-
-                {!!interpretacion.consideraciones?.length && (
-                  <View style={styles.considerations}>
-                    {interpretacion.consideraciones.map(
-                      (item, index) => (
-                        <Text
-                          key={`${index}-${item}`}
-                          style={styles.considerationText}
-                        >
-                          • {item}
-                        </Text>
-                      ),
-                    )}
-                  </View>
-                )}
-              </View>
-            )}
+                ),
+              )}
+            </View>
+          )}
+        </>
+      )}
+    </View>
+  )}
 
           {/* IA NO DISPONIBLE */}
           {interpretacion?.disponible === false && (
@@ -541,6 +561,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+
+  analysisArrow: {
+    color: "#16836C",
+    fontSize: 19,
+    fontWeight: "900",
+    paddingHorizontal: 5,
   },
 
   selectorTitle: {

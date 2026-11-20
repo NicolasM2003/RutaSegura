@@ -120,12 +120,12 @@ const [resultadosDireccion, setResultadosDireccion] =
 const [buscandoDireccion, setBuscandoDireccion] = useState(false);
 const [errorDireccion, setErrorDireccion] = useState<string | null>(null);
 
-// Espacio reservado para la barra inferior de ubicación y capas.
-const bottomDock = Math.max(insets.bottom, 8) + 12;
+// Los accesos de ubicación y capas están arriba; solo reservamos el área del sistema.
+const bottomDock = 0;
 
 // Altura disponible para el planificador abierto.
 const alturaPlanificador = Math.min(
-  Math.max(height * 0.72, 350),
+  Math.max(height * 0.62, 350),
   Math.max(height - insets.top - bottomDock - 12, 350),
 );
 
@@ -139,8 +139,8 @@ const alturaMaximaResultados = Math.max(
 
 const alturaExpandida = modoResultados
   ? Math.min(
-      Math.max(height * 0.62, 350),
-      alturaMaximaResultados,
+      Math.max(height * 0.46, 500),
+      Math.max(height - insets.top - insets.bottom - 18, 350),
     )
   : alturaPlanificador;
 
@@ -166,7 +166,7 @@ useEffect(() => {
 
 const bottomPanel =
   modoResultados && expandido
-    ? Math.max(insets.bottom, - 26, 0)
+    ? 0
     : bottomDock;
 
 useEffect(() => {
@@ -333,7 +333,7 @@ useEffect(() => {
       style={[
         styles.collapsedContainer,
         {
-          bottom: Math.max(insets.bottom, 8) + 12,
+          bottom: bottomDock,
         },
       ]}
     >
@@ -349,19 +349,21 @@ useEffect(() => {
         onPress={() => setExpandido(true)}
         style={styles.collapsedPlanner}
       >
-        <Text style={styles.eyebrow}>
-          {estadoContraido.eyebrow}
-        </Text>
+        <View style={styles.collapsedCopy}>
+          <Text numberOfLines={1} style={styles.eyebrow}>
+            {estadoContraido.eyebrow}
+          </Text>
 
-        <Text style={styles.collapsedTitle}>
-          {estadoContraido.titulo}
-        </Text>
+          <Text numberOfLines={1} style={styles.collapsedTitle}>
+            {estadoContraido.titulo}
+          </Text>
 
-        <Text style={styles.collapsedSubtitle}>
-          {estadoContraido.descripcion}
-        </Text>
+          <Text numberOfLines={1} style={styles.collapsedSubtitle}>
+            {estadoContraido.descripcion}
+          </Text>
+        </View>
 
-                <Text style={styles.collapsedArrow}>⌃</Text>
+        <Text style={styles.collapsedArrow}>⌃</Text>
               </Pressable>
             </View>
           );
