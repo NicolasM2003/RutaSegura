@@ -181,6 +181,18 @@ const obtenerRutasAlternativas = async (req, res) => {
       error
     );
 
+    const interpretacion =
+  await interpretarRutasAlternativas({
+    comuna: parametros.comuna,
+    origen: parametros.origen,
+    destino: parametros.destino,
+    rangoHorario: parametros.rangoHorario,
+    perfilSeleccionado:
+      resultado.perfil_principal ??
+      parametros.perfilRuta,
+    resultado,
+  });
+
     const status = error?.code === "BUSQUEDA_SATURADA" ? 503 : 400;
     return res.status(status).json({
       error: error.message,

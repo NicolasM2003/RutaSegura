@@ -43,6 +43,8 @@ const construirContextoRutasIA = ({
   rutas,
   rango_horario,
   rangoHorario,
+  perfilSeleccionado,
+  perfilMasSeguro,
 }) => {
   const rutasDisponibles = Array.isArray(rutas)
     ? rutas
@@ -60,6 +62,12 @@ const construirContextoRutasIA = ({
     },
 
     cantidad_rutas: rutasDisponibles.length,
+
+    perfil_seleccionado:
+      perfilSeleccionado ?? null,
+
+    perfil_mas_seguro:
+      perfilMasSeguro ?? null,
 
     rutas: rutasDisponibles.map((ruta) => ({
       perfil_ruta: ruta.perfil_ruta ?? null,

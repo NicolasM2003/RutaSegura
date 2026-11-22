@@ -1,7 +1,12 @@
+
 /**
  * Valida la respuesta generada por el modelo de IA.
+ *
  * La recomendación y las comparaciones deben corresponder
  * exclusivamente a los perfiles de ruta recibidos.
+ *
+ * Además, comprueba que la recomendación coincida con
+ * la alternativa de menor riesgo determinada por el backend.
  */
 
 const crearErrorValidacion = (codigo, mensaje) => {
@@ -49,7 +54,11 @@ const validarObjeto = (valor, campo, clavesEsperadas) => {
   }
 };
 
-const validarRespuestaModelo = (respuesta, perfilesEsperados) => {
+const validarRespuestaModelo = (
+  respuesta,
+  perfilesEsperados,
+  perfilMasSeguro = null
+) => {
   if (
     !Array.isArray(perfilesEsperados) ||
     perfilesEsperados.length === 0 ||
@@ -101,6 +110,20 @@ const validarRespuestaModelo = (respuesta, perfilesEsperados) => {
 
   const perfilesPermitidos = new Set(perfilesEsperados);
 
+  // Validar el perfil de menor riesgo determinado por el backend.
+  if (perfilMasSeguro !== null) {
+    if (
+      typeof perfilMasSeguro !== "string" ||
+      !perfilMasSeguro.trim() ||
+      !perfilesPermitidos.has(perfilMasSeguro)
+    ) {
+      throw crearErrorValidacion(
+        "IA_PERFIL_MAS_SEGURO_INVALIDO",
+        "El perfil de menor riesgo no corresponde a una ruta existente."
+      );
+    }
+  }
+
   validarObjeto(datos.recomendacion, "recomendacion", [
     "perfil_ruta",
     "motivo",
@@ -116,6 +139,17 @@ const validarRespuestaModelo = (respuesta, perfilesEsperados) => {
     throw crearErrorValidacion(
       "IA_PERFIL_RECOMENDADO_INVALIDO",
       "La recomendación no corresponde a una ruta existente."
+    );
+  }
+
+  // Garantizar que la IA recomiende la alternativa de menor riesgo.
+  if (
+    perfilMasSeguro !== null &&
+    perfilRecomendado !== perfilMasSeguro
+  ) {
+    throw crearErrorValidacion(
+      "IA_RECOMENDACION_NO_ES_MAS_SEGURA",
+      "La recomendación de la IA no coincide con la alternativa de menor riesgo."
     );
   }
 

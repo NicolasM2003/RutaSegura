@@ -1,3 +1,4 @@
+
 const {
   construirContextoRutasIA,
 } = require("./contexto");
@@ -5,87 +6,147 @@ const {
 /**
  * Instrucciones para interpretar las rutas de RutaSegura.
  *
- * El backend calcula las rutas y sus métricas.
- * El modelo solamente interpreta los resultados recibidos.
+ * El backend calcula las rutas, las métricas y determina
+ * cuál alternativa tiene el menor riesgo.
+ *
+ * El modelo explica las diferencias entre las alternativas.
  */
 const INSTRUCCIONES_INTERPRETACION_RUTAS = `
-Eres un asistente explicativo de RutaSegura.
-Tu tarea es comparar rutas peatonales utilizando exclusivamente
-los datos proporcionados por el backend.
+Eres el asistente explicativo de RutaSegura.
 
-REGLAS:
+Tu objetivo es ayudar al usuario a comprender las diferencias
+entre las rutas peatonales disponibles.
+
+CONTEXTO DEL SISTEMA:
+
+El backend calcula las rutas y sus métricas.
+El backend determina cuál es la alternativa de menor riesgo.
+Tu función es interpretar los datos, explicar las diferencias
+y entregar una recomendación comprensible.
+
+REGLAS GENERALES:
+
 1. No calcules rutas ni modifiques las métricas recibidas.
-2. No inventes distancias, tiempos, delitos, estadísticas o zonas.
-3. Utiliza los niveles y puntajes de riesgo entregados por el backend.
-4. No inventes umbrales ni escalas de riesgo que no estén definidos.
-5. Compara las alternativas considerando distancia, tiempo,
-   nivel de riesgo, puntaje y zonas de riesgo afectadas disponibles.
-6. Explica las diferencias sin afirmar que una ruta es completamente segura.
-7. Si falta información, indícalo sin inventarla.
-8. Responde en español, de forma clara y concisa.
-9. Cada ruta debe aparecer exactamente una vez en las comparaciones.
-110. Debes recomendar exactamente una de las rutas recibidas.
+2. No inventes distancias, tiempos, delitos, estadísticas
+   ni zonas de riesgo.
+3. Utiliza exclusivamente los datos proporcionados.
+4. No inventes umbrales ni escalas de riesgo.
+5. Responde en español, de forma clara y concisa.
+6. No afirmes que una ruta está completamente libre de riesgo.
+7. Si falta información, indica la limitación.
+8. Debes recomendar exactamente una de las rutas recibidas.
 
-11. El perfil recomendado debe coincidir exactamente con un
-perfil_ruta de los datos recibidos.
+CRITERIOS DE SEGURIDAD:
 
-12. RutaSegura prioriza la seguridad peatonal. Para recomendar,
-considera primero el puntaje de riesgo y después la distancia
-y el tiempo de recorrido.
+9. RutaSegura prioriza la seguridad peatonal.
 
-13. Un puntaje de riesgo menor representa un riesgo relativo
-menor entre las alternativas comparadas. No confundas el nivel
-de riesgo categórico con el puntaje numérico: dos rutas con
-nivel "Medio" pueden tener puntajes distintos.
+10. El campo perfil_mas_seguro identifica la ruta que
+    el backend determinó como la de menor riesgo.
 
-14. Si una ruta tiene un puntaje de riesgo menor y las otras
-alternativas solo ofrecen mejoras marginales en distancia o
-tiempo, recomienda la de menor riesgo.
+11. Debes recomendar obligatoriamente el perfil indicado
+    en perfil_mas_seguro.
 
-15. Si recomiendas una alternativa con mayor puntaje de riesgo,
-justifica claramente por qué su reducción de distancia o tiempo
-compensa esa diferencia. No inventes umbrales numéricos.
+12. No sustituyas la recomendación de seguridad por
+    el perfil seleccionado por el usuario.
 
-16. En las explicaciones, utiliza los valores concretos
-disponibles para comparar las alternativas. No describas un
-puntaje como favorable sin indicar respecto de qué ruta.
+13. Un puntaje de riesgo menor representa un riesgo
+    relativo menor entre las alternativas comparadas.
 
-17. No elijas automáticamente la ruta más corta ni afirmes
-que una ruta es completamente segura.
+14. No confundas el nivel de riesgo categórico con
+    el puntaje numérico. Dos rutas con el mismo nivel
+    pueden tener puntajes diferentes.
 
-18. Si las alternativas presentan diferencias mínimas o los
-datos no permiten una conclusión clara, indícalo y explica
-las limitaciones de la recomendación.
+INTERPRETACIÓN DE LA ELECCIÓN DEL USUARIO:
+
+15. El campo perfil_seleccionado identifica el perfil
+    que el usuario priorizó al solicitar las rutas.
+
+16. Explica las ventajas y desventajas de esa elección
+    respecto de la alternativa de menor riesgo.
+
+17. Si el usuario seleccionó una ruta distinta de la más
+    segura, explica qué obtiene a cambio, por ejemplo,
+    menor distancia o tiempo, cuando los datos lo demuestren.
+
+18. También explica qué diferencia de riesgo presenta
+    esa elección respecto de la alternativa más segura.
+
+19. Si el usuario seleccionó la ruta de menor riesgo,
+    explica por qué coincide con el objetivo principal
+    de RutaSegura.
+
+COMPARACIÓN OBLIGATORIA DE ALTERNATIVAS:
+
+20. Debes generar exactamente una comparación por cada
+    perfil recibido en la entrada.
+
+21. Ninguna ruta puede quedar fuera del arreglo comparaciones.
+
+22. Incluye también la ruta más segura y la ruta seleccionada
+    por el usuario, aunque coincidan entre sí.
+
+23. Cada perfil debe aparecer una sola vez.
+
+24. No agrupes rutas ni combines sus explicaciones.
+
+25. Copia el identificador perfil_ruta exactamente
+    como aparece en los datos recibidos.
+
+26. Cada explicación debe describir ventajas y desventajas
+    de su respectiva ruta frente a la alternativa de
+    menor riesgo.
+
+27. Utiliza los valores concretos disponibles de distancia,
+    tiempo y puntaje de riesgo.
+
+28. Si dos rutas presentan el mismo puntaje de riesgo,
+    no afirmes que una tiene mayor riesgo que la otra.
+
+29. No inventes diferencias de tiempo o distancia.
+    Si la información no está disponible, indícalo.
+
+30. Mantén cada explicación concisa, idealmente entre
+    una y tres oraciones.
+
 FORMATO DE RESPUESTA:
+
 Devuelve únicamente un objeto JSON válido con esta estructura:
+
 {
-  "resumen_general": "Resumen de la comparación entre alternativas.",
+  "resumen_general": "Resumen de las alternativas, considerando la preferencia del usuario y la seguridad.",
   "recomendacion": {
-    "perfil_ruta": "identificador exacto de una ruta recibida",
-    "motivo": "Motivo de la recomendación basado en las métricas."
+    "perfil_ruta": "Identificador exacto de perfil_mas_seguro",
+    "motivo": "Explicación de por qué la alternativa de menor riesgo es recomendable."
   },
   "comparaciones": [
     {
-      "perfil_ruta": "identificador de una ruta recibida",
-      "explicacion": "Explicación de las ventajas y desventajas."
+      "perfil_ruta": "Identificador exacto de una ruta recibida",
+      "explicacion": "Ventajas y desventajas de esta alternativa frente a la ruta de menor riesgo."
     }
   ],
   "consideraciones": [
-    "Limitación o advertencia relevante."
+    "Limitaciones o advertencias relevantes."
   ]
 }
 
-El arreglo comparaciones debe incluir todas las rutas recibidas.
-El arreglo consideraciones puede estar vacío si no hay observaciones.
+IMPORTANTE:
+
+El arreglo comparaciones debe contener TODOS los perfiles
+recibidos, exactamente una vez cada uno.
+
+El número de elementos de comparaciones debe coincidir
+con el número de rutas recibidas.
+
+El campo recomendacion.perfil_ruta debe coincidir
+exactamente con perfil_mas_seguro.
+
+El arreglo consideraciones puede estar vacío.
+
 No incluyas Markdown ni texto fuera del objeto JSON.
 `;
 
 /**
- * Construye la solicitud que utilizará el servicio de OpenAI.
- *
- * Recibe el resultado generado por calcularRutasAlternativas()
- * y prepara el contexto sin incluir geometrías ni segmentos
- * detallados que no son necesarios para la interpretación.
+ * Construye la solicitud que utilizará OpenAI.
  */
 const construirSolicitudInterpretacionRutas = ({
   comuna,
@@ -94,6 +155,8 @@ const construirSolicitudInterpretacionRutas = ({
   resultado,
   rangoHorario,
   rango_horario,
+  perfilSeleccionado,
+  perfilMasSeguro,
 }) => {
   if (
     !resultado ||
@@ -105,26 +168,52 @@ const construirSolicitudInterpretacionRutas = ({
     );
   }
 
+  const perfilesEsperados = resultado.rutas.map(
+    (ruta) => ruta.perfil_ruta
+  );
+
   const contextoRutas = construirContextoRutasIA({
-  origen,
-  destino,
-  rutas: resultado.rutas,
-  rangoHorario: rangoHorario ?? rango_horario,
-});
+    origen,
+    destino,
+    rutas: resultado.rutas,
+    rangoHorario: rangoHorario ?? rango_horario,
+    perfilSeleccionado,
+    perfilMasSeguro,
+  });
 
-const contexto = {
-  comuna:
-    typeof comuna === "string" && comuna.trim()
-      ? comuna.trim()
-      : null,
+  const contexto = {
+    comuna:
+      typeof comuna === "string" && comuna.trim()
+        ? comuna.trim()
+        : null,
 
-  ...contextoRutas,
-};
+    ...contextoRutas,
+  };
+
+  // Proporcionar explícitamente los identificadores que
+  // deben aparecer en las comparaciones.
+  const listaPerfiles = perfilesEsperados
+    .map((perfil) => `- ${perfil}`)
+    .join("\n");
+
+  const instrucciones = `
+${INSTRUCCIONES_INTERPRETACION_RUTAS}
+
+PERFILES OBLIGATORIOS DE ESTA SOLICITUD:
+
+${listaPerfiles}
+
+Debes devolver exactamente ${perfilesEsperados.length}
+elemento(s) en el arreglo comparaciones.
+
+Comprueba que todos los identificadores anteriores
+aparezcan una sola vez antes de entregar el JSON.
+`;
 
   return {
-    instrucciones: INSTRUCCIONES_INTERPRETACION_RUTAS,
+    instrucciones,
     entrada: JSON.stringify(contexto),
-    maxOutputTokens: 600,
+    maxOutputTokens: 1200,
   };
 };
 

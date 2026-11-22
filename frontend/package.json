@@ -6,6 +6,7 @@
     "@expo/ui": "~57.0.26",
     "@linkurious/leaflet-heat": "^0.2.6",
     "expo": "~57.0.33",
+    "expo-build-properties": "~57.0.23",
     "expo-constants": "~57.0.16",
     "expo-dev-client": "~57.0.21",
     "expo-device": "~57.0.2",

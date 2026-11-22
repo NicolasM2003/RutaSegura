@@ -124,8 +124,8 @@ export default function PanelResultados({
   const [mostrarAnalisis, setMostrarAnalisis] = useState(false);
 
   useEffect(() => {
-  setMostrarAnalisis(false);
-}, [rutaSeleccionada]);
+    setMostrarAnalisis(false);
+  }, [rutaSeleccionada]);
 
   useEffect(() => {
     if (!cargando) {
@@ -166,7 +166,7 @@ export default function PanelResultados({
     },
   ];
 
-  // Identificar la ruta seleccionada.
+  // Identificar la alternativa que el usuario está visualizando.
   const rutaActiva =
     rutas.find(
       (ruta) => ruta.perfil_ruta === rutaSeleccionada,
@@ -174,7 +174,8 @@ export default function PanelResultados({
     rutas.find((ruta) => ruta.es_ruta_principal) ??
     rutas[0];
 
-  const comparacionActual =
+  // Recuperar la explicación correspondiente a esa alternativa.
+  const comparacionActiva =
     interpretacion?.comparaciones?.find(
       (item) =>
         item.perfil_ruta === rutaActiva?.perfil_ruta,
@@ -188,7 +189,7 @@ export default function PanelResultados({
   const tieneDetalleIA = Boolean(
     interpretacion?.recomendacion?.motivo ||
       interpretacion?.resumen_general ||
-      comparacionActual?.explicacion ||
+      comparacionActiva?.explicacion ||
       interpretacion?.consideraciones?.length,
   );
 
@@ -424,83 +425,92 @@ export default function PanelResultados({
             </View>
           </View>
 
-          {/* RECOMENDACIÓN DE RUTASEGURA DESPLEGABLE */}
-{interpretacion?.disponible === true &&
-  tieneDetalleIA && (
-    <View style={styles.aiCard}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{
-          expanded: mostrarAnalisis,
-        }}
-        onPress={() =>
-          setMostrarAnalisis((actual) => !actual)
-        }
-        style={styles.aiHeader}
-      >
-        <View style={styles.aiIcon}>
-          <Text style={styles.aiIconText}>✦</Text>
-        </View>
+          {/* ANÁLISIS DE RUTASEGURA DESPLEGABLE */}
+          {interpretacion?.disponible === true &&
+            tieneDetalleIA && (
+              <View style={styles.aiCard}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{
+                    expanded: mostrarAnalisis,
+                  }}
+                  onPress={() =>
+                    setMostrarAnalisis((actual) => !actual)
+                  }
+                  style={styles.aiHeader}
+                >
+                  <View style={styles.aiIcon}>
+                    <Text style={styles.aiIconText}>✦</Text>
+                  </View>
 
-        <View style={styles.aiHeaderCopy}>
-          <Text style={styles.aiEyebrow}>
-            ANÁLISIS INTELIGENTE
-          </Text>
+                  <View style={styles.aiHeaderCopy}>
+                    <Text style={styles.aiEyebrow}>
+                      ANÁLISIS INTELIGENTE
+                    </Text>
 
-          <Text style={styles.aiTitle}>
-            Recomendación de RutaSegura
-          </Text>
-        </View>
+                    <Text style={styles.aiTitle}>
+                      Análisis de RutaSegura
+                    </Text>
+                  </View>
 
-        <Text style={styles.analysisArrow}>
-          {mostrarAnalisis ? "⌃" : "⌄"}
-        </Text>
-      </Pressable>
-
-      {mostrarAnalisis && (
-        <>
-          {!!interpretacion.recomendacion?.motivo && (
-            <Text style={styles.aiBody}>
-              {interpretacion.recomendacion.motivo}
-            </Text>
-          )}
-
-          {!!interpretacion.resumen_general && (
-            <Text style={styles.aiBody}>
-              {interpretacion.resumen_general}
-            </Text>
-          )}
-
-          {!!comparacionActual?.explicacion && (
-            <View style={styles.comparison}>
-              <Text style={styles.comparisonTitle}>
-                Sobre esta alternativa
-              </Text>
-
-              <Text style={styles.aiBody}>
-                {comparacionActual.explicacion}
-              </Text>
-            </View>
-          )}
-
-          {!!interpretacion.consideraciones?.length && (
-            <View style={styles.considerations}>
-              {interpretacion.consideraciones.map(
-                (item, index) => (
-                  <Text
-                    key={`${index}-${item}`}
-                    style={styles.considerationText}
-                  >
-                    • {item}
+                  <Text style={styles.analysisArrow}>
+                    {mostrarAnalisis ? "⌃" : "⌄"}
                   </Text>
-                ),
-              )}
-            </View>
-          )}
-        </>
-      )}
-    </View>
-  )}
+                </Pressable>
+
+                {mostrarAnalisis && (
+                  <>
+                    {/* PRIMERO: EXPLICACIÓN DE LA ALTERNATIVA ACTIVA */}
+                    {!!comparacionActiva?.explicacion && (
+                      <View style={styles.comparison}>
+                        <Text style={styles.comparisonTitle}>
+                          Sobre esta alternativa
+                        </Text>
+
+                        <Text style={styles.aiBody}>
+                          {comparacionActiva.explicacion}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* SEGUNDO: RECOMENDACIÓN DE SEGURIDAD */}
+                    {!!interpretacion.recomendacion?.motivo && (
+                      <View style={styles.comparison}>
+                        <Text style={styles.comparisonTitle}>
+                          Recomendación de RutaSegura
+                        </Text>
+
+                        <Text style={styles.aiBody}>
+                          {interpretacion.recomendacion.motivo}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* RESUMEN GENERAL DE LAS ALTERNATIVAS */}
+                    {!!interpretacion.resumen_general && (
+                      <Text style={styles.aiBody}>
+                        {interpretacion.resumen_general}
+                      </Text>
+                    )}
+
+                    {!!interpretacion.consideraciones?.length && (
+                      <View style={styles.considerations}>
+                        {interpretacion.consideraciones.map(
+                          (item, index) => (
+                            <Text
+                              key={`${index}-${item}`}
+                              style={styles.considerationText}
+                            >
+                              • {item}
+                            </Text>
+                          ),
+                        )}
+                      </View>
+                    )}
+                  </>
+                )}
+              </View>
+            )}
 
           {/* IA NO DISPONIBLE */}
           {interpretacion?.disponible === false && (

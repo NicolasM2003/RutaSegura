@@ -124,6 +124,8 @@ describe("construirContextoRutasIA", () => {
         },
       ],
       rango_horario: "20:00 - 23:59",
+      perfil_seleccionado: null,
+    perfil_mas_seguro: null,
     });
   });
 });
