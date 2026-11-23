@@ -109,6 +109,321 @@ function puntaje(ruta: RutaAlternativa) {
     : "—";
 }
 
+// ----------------------------------------------------
+// FUNCIONES PARA COMPARAR ALTERNATIVAS
+// ----------------------------------------------------
+
+function esNumeroFinito(
+  valor: number | undefined,
+): valor is number {
+  return (
+    typeof valor === "number" &&
+    Number.isFinite(valor)
+  );
+}
+
+function formatoDecimal(
+  valor: number,
+  decimales: number,
+) {
+  return valor
+    .toFixed(decimales)
+    .replace(".", ",");
+}
+
+function formatoDistanciaDiferencia(
+  metros: number,
+) {
+  const valor = Math.abs(metros);
+
+  return valor >= 1000
+    ? `${formatoDecimal(valor / 1000, 2)} km`
+    : `${Math.round(valor)} m`;
+}
+
+function formatoTiempoDiferencia(
+  minutos: number,
+) {
+  const valor = Math.abs(minutos);
+
+  if (valor > 0 && valor < 0.1) {
+    return `${formatoDecimal(
+      valor * 60,
+      1,
+    )} segundos`;
+  }
+
+  const texto = valor
+    .toFixed(1)
+    .replace(/\.0$/, "")
+    .replace(".", ",");
+
+  return `${texto} minutos`;
+}
+
+function unirConY(elementos: string[]) {
+  if (elementos.length <= 1) {
+    return elementos[0] ?? "";
+  }
+
+  return `${elementos
+    .slice(0, -1)
+    .join(", ")} y ${
+    elementos[elementos.length - 1]
+  }`;
+}
+
+/**
+ * Construye una comparación de la ruta activa frente
+ * a TODAS las demás alternativas.
+ *
+ * Utiliza directamente las métricas calculadas
+ * por el backend. No depende de la IA.
+ */
+function generarExplicacionComparativa(
+  rutaActual: RutaAlternativa | undefined,
+  rutas: RutaAlternativa[],
+): string | null {
+  if (!rutaActual) {
+    return null;
+  }
+
+  const otrasRutas = rutas.filter(
+    (ruta) =>
+      ruta.perfil_ruta !== rutaActual.perfil_ruta,
+  );
+
+  if (otrasRutas.length === 0) {
+    return (
+      "Solo hay una alternativa disponible, " +
+      "por lo que no existen otras rutas con las " +
+      "que compararla."
+    );
+  }
+
+  return otrasRutas
+    .map((otraRuta) => {
+      const detalles: string[] = [];
+
+      // Comparar distancia.
+      if (
+        esNumeroFinito(
+          rutaActual.distancia_metros,
+        ) &&
+        esNumeroFinito(
+          otraRuta.distancia_metros,
+        )
+      ) {
+        const diferencia =
+          rutaActual.distancia_metros -
+          otraRuta.distancia_metros;
+
+        if (Math.abs(diferencia) < 0.5) {
+          detalles.push(
+            "tiene prácticamente la misma distancia",
+          );
+        } else {
+          detalles.push(
+            `es ${formatoDistanciaDiferencia(
+              diferencia,
+            )} ${
+              diferencia > 0
+                ? "más larga"
+                : "más corta"
+            }`,
+          );
+        }
+      }
+
+      // Comparar tiempo.
+      if (
+        esNumeroFinito(
+          rutaActual.tiempo_estimado_minutos,
+        ) &&
+        esNumeroFinito(
+          otraRuta.tiempo_estimado_minutos,
+        )
+      ) {
+        const diferencia =
+          rutaActual.tiempo_estimado_minutos -
+          otraRuta.tiempo_estimado_minutos;
+
+        if (Math.abs(diferencia) < 0.0001) {
+          detalles.push(
+            "requiere el mismo tiempo",
+          );
+        } else {
+          detalles.push(
+            `requiere ${formatoTiempoDiferencia(
+              diferencia,
+            )} ${
+              diferencia > 0
+                ? "más"
+                : "menos"
+            }`,
+          );
+        }
+      }
+
+      // Comparar puntaje de riesgo.
+      if (
+        esNumeroFinito(
+          rutaActual.puntaje_riesgo,
+        ) &&
+        esNumeroFinito(
+          otraRuta.puntaje_riesgo,
+        )
+      ) {
+        const diferencia =
+          rutaActual.puntaje_riesgo -
+          otraRuta.puntaje_riesgo;
+
+        if (Math.abs(diferencia) < 0.005) {
+          detalles.push(
+            "presenta el mismo puntaje de riesgo",
+          );
+        } else {
+          detalles.push(
+            `presenta un puntaje de riesgo ${
+              formatoDecimal(
+                Math.abs(diferencia),
+                2,
+              )
+            } puntos ${
+              diferencia > 0
+                ? "mayor"
+                : "menor"
+            }`,
+          );
+        }
+      }
+
+      if (detalles.length === 0) {
+        return (
+          `No hay métricas suficientes para ` +
+          `compararla con ${nombrePerfil(otraRuta)}.`
+        );
+      }
+
+      return (
+        `Frente a ${nombrePerfil(otraRuta)}, ` +
+        `esta alternativa ${unirConY(detalles)}.`
+      );
+    })
+    .join("\n");
+}
+
+/**
+ * Construye el motivo de recomendación.
+ *
+ * La alternativa recomendada sigue siendo la que
+ * determinó el backend como de menor riesgo.
+ */
+function generarMotivoRecomendacion(
+  rutaActual: RutaAlternativa | undefined,
+  rutaRecomendada: RutaAlternativa | undefined,
+): string | null {
+  if (
+    !rutaRecomendada ||
+    !esNumeroFinito(
+      rutaRecomendada.puntaje_riesgo,
+    )
+  ) {
+    return null;
+  }
+
+  const puntajeRecomendado =
+    rutaRecomendada.puntaje_riesgo;
+
+  const prioridadSeguridad =
+    "RutaSegura prioriza la seguridad peatonal por encima de reducir la distancia o el tiempo de recorrido.";
+
+  if (
+    !rutaActual ||
+    !esNumeroFinito(rutaActual.puntaje_riesgo)
+  ) {
+    return (
+      `RutaSegura recomienda ${nombrePerfil(
+        rutaRecomendada,
+      )}, con un puntaje de riesgo de ${
+        formatoDecimal(
+          puntajeRecomendado,
+          2,
+        )
+      }. ${prioridadSeguridad}`
+    );
+  }
+
+  // El usuario está visualizando la ruta recomendada.
+  if (
+    rutaActual.perfil_ruta ===
+    rutaRecomendada.perfil_ruta
+  ) {
+    return (
+      "Tu selección coincide con la alternativa " +
+      "recomendada por RutaSegura. Presenta el menor " +
+      `puntaje de riesgo disponible (${
+        formatoDecimal(
+          puntajeRecomendado,
+          2,
+        )
+      }). ${prioridadSeguridad}`
+    );
+  }
+
+  const diferencia =
+    rutaActual.puntaje_riesgo -
+    puntajeRecomendado;
+
+  if (diferencia > 0.005) {
+    return (
+      `RutaSegura recomienda ${nombrePerfil(
+        rutaRecomendada,
+      )}, con un puntaje de riesgo de ${
+        formatoDecimal(
+          puntajeRecomendado,
+          2,
+        )
+      }. Esto representa ${
+        formatoDecimal(diferencia, 2)
+      } puntos menos que ${
+        nombrePerfil(rutaActual)
+      }, cuya puntuación es ${
+        formatoDecimal(
+          rutaActual.puntaje_riesgo,
+          2,
+        )
+      }. ${prioridadSeguridad}`
+    );
+  }
+
+  if (diferencia < -0.005) {
+    return (
+      `Los datos muestran que ${
+        nombrePerfil(rutaActual)
+      } tiene un puntaje de riesgo inferior al de ` +
+      "la alternativa recomendada. Es necesario " +
+      "revisar la consistencia de estos datos."
+    );
+  }
+
+  return (
+    `RutaSegura recomienda ${nombrePerfil(
+      rutaRecomendada,
+    )}. Ambas alternativas presentan el mismo ` +
+    `puntaje de riesgo (${
+      formatoDecimal(
+        puntajeRecomendado,
+        2,
+      )
+    }). ${prioridadSeguridad}`
+  );
+}
+
+// ----------------------------------------------------
+// COMPONENTE PRINCIPAL
+// ----------------------------------------------------
+
 export default function PanelResultados({
   origenCompleto,
   resultado,
@@ -118,10 +433,14 @@ export default function PanelResultados({
   onSeleccionarRuta,
 }: Props) {
   const rutas = resultado?.rutas ?? [];
-  const interpretacion = resultado?.interpretacion_ia;
+  const interpretacion =
+    resultado?.interpretacion_ia;
 
-  const [pasoCalculo, setPasoCalculo] = useState(0);
-  const [mostrarAnalisis, setMostrarAnalisis] = useState(false);
+  const [pasoCalculo, setPasoCalculo] =
+    useState(0);
+
+  const [mostrarAnalisis, setMostrarAnalisis] =
+    useState(false);
 
   useEffect(() => {
     setMostrarAnalisis(false);
@@ -154,11 +473,13 @@ export default function PanelResultados({
   const estadosCalculo = [
     {
       titulo: "Calculando rutas seguras",
-      detalle: "Buscando recorridos peatonales entre tus puntos.",
+      detalle:
+        "Buscando recorridos peatonales entre tus puntos.",
     },
     {
       titulo: "Comparando alternativas",
-      detalle: "Revisando distancia, tiempo estimado y nivel de riesgo.",
+      detalle:
+        "Revisando distancia, tiempo estimado y nivel de riesgo.",
     },
     {
       titulo: "Preparando tu recomendación",
@@ -169,16 +490,46 @@ export default function PanelResultados({
   // Identificar la alternativa que el usuario está visualizando.
   const rutaActiva =
     rutas.find(
-      (ruta) => ruta.perfil_ruta === rutaSeleccionada,
+      (ruta) =>
+        ruta.perfil_ruta === rutaSeleccionada,
     ) ??
-    rutas.find((ruta) => ruta.es_ruta_principal) ??
+    rutas.find(
+      (ruta) => ruta.es_ruta_principal,
+    ) ??
     rutas[0];
 
-  // Recuperar la explicación correspondiente a esa alternativa.
+  // Recuperar la comparación de IA como respaldo.
   const comparacionActiva =
     interpretacion?.comparaciones?.find(
       (item) =>
-        item.perfil_ruta === rutaActiva?.perfil_ruta,
+        item.perfil_ruta ===
+        rutaActiva?.perfil_ruta,
+    );
+
+  // Identificar la ruta recomendada por el backend.
+  // El frontend no vuelve a calcular cuál es la más segura.
+  const rutaRecomendada =
+    interpretacion?.disponible === true
+      ? rutas.find(
+          (ruta) =>
+            ruta.perfil_ruta ===
+            interpretacion.recomendacion?.perfil_ruta,
+        )
+      : undefined;
+
+  // Comparar la alternativa activa con todas las restantes.
+  const explicacionAlternativa =
+    generarExplicacionComparativa(
+      rutaActiva,
+      rutas,
+    ) ??
+    comparacionActiva?.explicacion;
+
+  // Actualizar el motivo según la ruta que se está mostrando.
+  const motivoRecomendacion =
+    generarMotivoRecomendacion(
+      rutaActiva,
+      rutaRecomendada,
     );
 
   const recomendadaPorIA =
@@ -187,9 +538,9 @@ export default function PanelResultados({
       rutaActiva?.perfil_ruta;
 
   const tieneDetalleIA = Boolean(
-    interpretacion?.recomendacion?.motivo ||
+    motivoRecomendacion ||
       interpretacion?.resumen_general ||
-      comparacionActiva?.explicacion ||
+      explicacionAlternativa ||
       interpretacion?.consideraciones?.length,
   );
 
@@ -255,14 +606,18 @@ export default function PanelResultados({
               <View style={styles.countPill}>
                 <Text style={styles.countText}>
                   {rutas.length}{" "}
-                  {rutas.length === 1 ? "ruta" : "rutas"}
+                  {rutas.length === 1
+                    ? "ruta"
+                    : "rutas"}
                 </Text>
               </View>
             </View>
 
             <View style={styles.routesRow}>
               {rutas.map((ruta) => {
-                const color = colorPerfil(ruta.perfil_ruta);
+                const color = colorPerfil(
+                  ruta.perfil_ruta,
+                );
 
                 const seleccionada =
                   ruta.perfil_ruta ===
@@ -272,12 +627,16 @@ export default function PanelResultados({
                   <Pressable
                     key={ruta.perfil_ruta}
                     accessibilityRole="button"
-                    accessibilityLabel={`Ver ${nombrePerfil(ruta)} en el mapa`}
+                    accessibilityLabel={`Ver ${nombrePerfil(
+                      ruta,
+                    )} en el mapa`}
                     accessibilityState={{
                       selected: seleccionada,
                     }}
                     onPress={() => {
-                      onSeleccionarRuta(ruta.perfil_ruta);
+                      onSeleccionarRuta(
+                        ruta.perfil_ruta,
+                      );
                     }}
                     style={({ pressed }) => [
                       styles.routeOption,
@@ -291,11 +650,15 @@ export default function PanelResultados({
                       pressed && styles.pressed,
                     ]}
                   >
-                    <View style={styles.routeOptionTitleRow}>
+                    <View
+                      style={styles.routeOptionTitleRow}
+                    >
                       <View
                         style={[
                           styles.routeDot,
-                          { backgroundColor: color },
+                          {
+                            backgroundColor: color,
+                          },
                         ]}
                       />
 
@@ -413,7 +776,8 @@ export default function PanelResultados({
                 </Text>
 
                 <Text style={styles.metricValue}>
-                  {rutaActiva.nivel_riesgo ?? "No informado"}
+                  {rutaActiva.nivel_riesgo ??
+                    "No informado"}
                 </Text>
               </View>
             </View>
@@ -435,12 +799,16 @@ export default function PanelResultados({
                     expanded: mostrarAnalisis,
                   }}
                   onPress={() =>
-                    setMostrarAnalisis((actual) => !actual)
+                    setMostrarAnalisis(
+                      (actual) => !actual,
+                    )
                   }
                   style={styles.aiHeader}
                 >
                   <View style={styles.aiIcon}>
-                    <Text style={styles.aiIconText}>✦</Text>
+                    <Text style={styles.aiIconText}>
+                      ✦
+                    </Text>
                   </View>
 
                   <View style={styles.aiHeaderCopy}>
@@ -460,46 +828,54 @@ export default function PanelResultados({
 
                 {mostrarAnalisis && (
                   <>
-                    {/* PRIMERO: EXPLICACIÓN DE LA ALTERNATIVA ACTIVA */}
-                    {!!comparacionActiva?.explicacion && (
+                    {/* EXPLICACIÓN DE LA ALTERNATIVA ACTIVA */}
+                    {!!explicacionAlternativa && (
                       <View style={styles.comparison}>
-                        <Text style={styles.comparisonTitle}>
+                        <Text
+                          style={styles.comparisonTitle}
+                        >
                           Sobre esta alternativa
                         </Text>
 
                         <Text style={styles.aiBody}>
-                          {comparacionActiva.explicacion}
+                          {explicacionAlternativa}
                         </Text>
                       </View>
                     )}
 
-                    {/* SEGUNDO: RECOMENDACIÓN DE SEGURIDAD */}
-                    {!!interpretacion.recomendacion?.motivo && (
+                    {/* RECOMENDACIÓN DE SEGURIDAD */}
+                    {!!motivoRecomendacion && (
                       <View style={styles.comparison}>
-                        <Text style={styles.comparisonTitle}>
+                        <Text
+                          style={styles.comparisonTitle}
+                        >
                           Recomendación de RutaSegura
                         </Text>
 
                         <Text style={styles.aiBody}>
-                          {interpretacion.recomendacion.motivo}
+                          {motivoRecomendacion}
                         </Text>
                       </View>
                     )}
 
-                    {/* RESUMEN GENERAL DE LAS ALTERNATIVAS */}
+                    {/* RESUMEN GENERAL */}
                     {!!interpretacion.resumen_general && (
                       <Text style={styles.aiBody}>
                         {interpretacion.resumen_general}
                       </Text>
                     )}
 
-                    {!!interpretacion.consideraciones?.length && (
+                    {/* CONSIDERACIONES */}
+                    {!!interpretacion.consideraciones
+                      ?.length && (
                       <View style={styles.considerations}>
                         {interpretacion.consideraciones.map(
                           (item, index) => (
                             <Text
                               key={`${index}-${item}`}
-                              style={styles.considerationText}
+                              style={
+                                styles.considerationText
+                              }
                             >
                               • {item}
                             </Text>
@@ -553,6 +929,10 @@ export default function PanelResultados({
     </View>
   );
 }
+
+// ----------------------------------------------------
+// ESTILOS
+// ----------------------------------------------------
 
 const styles = StyleSheet.create({
   container: {
