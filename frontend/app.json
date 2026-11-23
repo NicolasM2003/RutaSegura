@@ -46,6 +46,13 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f70060a0-1ad5-4513-9ab0-8296b222afa3"
+      }
+    },
+    "owner": "nicolasm2003s-team"
   }
 }
