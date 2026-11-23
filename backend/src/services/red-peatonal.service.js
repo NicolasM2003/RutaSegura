@@ -265,6 +265,16 @@ const obtenerCacheComuna = (
   );
 };
 
+const serializarBbox = (bbox) =>
+  bbox
+    ? [
+        bbox.minLat,
+        bbox.minLon,
+        bbox.maxLat,
+        bbox.maxLon,
+      ].join(",")
+    : "sin-bbox";
+
 const cacheEstaVigente = (
   entrada
 ) => {
@@ -1683,28 +1693,62 @@ const obtenerRedPeatonal = async ({
    * ========================================================
    */
 
-  if (comuna || (soloSupabase && bboxNormalizado)) {
-    const resultadoSupabase =
-      await obtenerRedDesdeSupabase(
-        comuna,
-        bboxNormalizado,
-        { soloBbox: soloSupabase }
-      );
+  
+if (comuna || (soloSupabase && bboxNormalizado)) {
+  const cacheComuna = obtenerCacheComuna(comuna);
 
-    if (
-      resultadoSupabase.encontrada
-    ) {
+  const claveSupabase =
+    `supabase|bbox:${serializarBbox(bboxNormalizado)}|soloSupabase:${soloSupabase}`;
+
+  const entradaCache = cacheComuna.get(claveSupabase);
+
+  let resultadoSupabase;
+
+  // CACHE HIT: reutilizar información vigente.
+  if (cacheEstaVigente(entradaCache)) {
+    console.log(
+      `CACHÉ HIT - SUPABASE - ${comuna || "BBOX"}`
+    );
+
+    resultadoSupabase = entradaCache.resultado;
+  } else {
+    // CACHE MISS: consultar la fuente original.
+    console.log(
+      `CACHÉ MISS - SUPABASE - ${comuna || "BBOX"}`
+    );
+
+    const resultado = await obtenerRedDesdeSupabase(
+      comuna,
+      bboxNormalizado,
+      { soloBbox: soloSupabase }
+    );
+
+    // No almacenar resultados de consultas fallidas.
+    if (!resultado.consultaFallida) {
+      cacheComuna.set(claveSupabase, {
+        resultado,
+        fecha: Date.now(),
+      });
+
       console.log(
-        `Red peatonal ${comuna}: ${resultadoSupabase.segmentos.length} segmentos ${
-          bboxNormalizado
-            ? "dentro del BBOX"
-            : "totales"
-        }`
+        `CACHÉ GUARDADO - SUPABASE - ${comuna || "BBOX"}`
       );
-
-      return resultadoSupabase.segmentos;
     }
+
+    resultadoSupabase = resultado;
   }
+
+  if (resultadoSupabase.encontrada) {
+    console.log(
+      `Red peatonal ${comuna}: ${resultadoSupabase.segmentos.length} segmentos ${
+        bboxNormalizado ? "dentro del BBOX" : "totales"
+      }`
+    );
+
+    return resultadoSupabase.segmentos;
+  }
+}
+
 
   // Las rutas no deben consultar Overpass: los datos se cargan por separado
   // y /api/rutas solo consume los segmentos ya persistidos en red_peatonal.
