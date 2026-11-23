@@ -1,3 +1,4 @@
+
 const mockResponsesCreate = jest.fn();
 
 jest.mock("openai", () =>
@@ -104,7 +105,7 @@ describe("Integración del servicio de interpretación de rutas", () => {
     const resultado =
       await interpretarRutasAlternativas(datosRuta);
 
-    // Se realizó una solicitud al cliente simulado.
+    // La respuesta es válida desde el primer intento.
     expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
 
     const solicitud =
@@ -118,7 +119,7 @@ describe("Integración del servicio de interpretación de rutas", () => {
 
     // La solicitud contiene las instrucciones y el contexto.
     expect(solicitud.instructions).toContain("RutaSegura");
-    expect(solicitud.max_output_tokens).toBe(600);
+    expect(solicitud.max_output_tokens).toBe(1600);
 
     const contextoEnviado = JSON.parse(solicitud.input);
 
@@ -154,7 +155,8 @@ describe("Integración del servicio de interpretación de rutas", () => {
       code: "IA_JSON_INVALIDO",
     });
 
-    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+    // Primera respuesta inválida + un reintento inválido.
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
   });
 
   test("debe normalizar un error de API sin entregar una interpretación", async () => {
@@ -172,6 +174,7 @@ describe("Integración del servicio de interpretación de rutas", () => {
       status: 429,
     });
 
+    // Los errores de API no activan el reintento de validación.
     expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 

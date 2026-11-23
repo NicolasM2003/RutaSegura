@@ -109,6 +109,31 @@ function puntaje(ruta: RutaAlternativa) {
     : "—";
 }
 
+/**
+ * Convierte errores técnicos de consulta en mensajes comprensibles
+ * para el usuario. El detalle original se mantiene fuera de la UI.
+ */
+function obtenerMensajeErrorAmigable(error: string | null): string {
+  const detalle = error?.toLowerCase() ?? "";
+
+  const esErrorDeConexion = [
+    "fetch failed",
+    "connectexception",
+    "failed to connect",
+    "network request failed",
+    "unable to resolve host",
+    "connection refused",
+    "timed out",
+    "timeout",
+  ].some((fragmento) => detalle.includes(fragmento));
+
+  if (esErrorDeConexion) {
+    return "No pudimos conectar con el servidor. Revisa tu conexión e inténtalo nuevamente.";
+  }
+
+  return "No pudimos calcular las rutas. Inténtalo nuevamente. Si el problema continúa, revisa los puntos seleccionados.";
+}
+
 // ----------------------------------------------------
 // FUNCIONES PARA COMPARAR ALTERNATIVAS
 // ----------------------------------------------------
@@ -544,6 +569,9 @@ export default function PanelResultados({
       interpretacion?.consideraciones?.length,
   );
 
+  const mensajeErrorVisible =
+    obtenerMensajeErrorAmigable(error);
+
   return (
     <View style={styles.container}>
       {/* ESTADO SIN RUTA */}
@@ -588,7 +616,7 @@ export default function PanelResultados({
           </Text>
 
           <Text style={styles.errorBody}>
-            {error}
+            {mensajeErrorVisible}
           </Text>
         </View>
       )}
@@ -870,7 +898,7 @@ export default function PanelResultados({
                       ?.length && (
                       <View style={styles.considerations}>
                         {interpretacion.consideraciones.map(
-                          (item, index) => (
+                                                    (item, index) => (
                             <Text
                               key={`${index}-${item}`}
                               style={
