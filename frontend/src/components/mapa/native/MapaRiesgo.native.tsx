@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -14,9 +13,13 @@ import MapView, {
   Polyline,
   type Region,
 } from "react-native-maps";
-import ControlesMapa, { RANGOS_HORARIOS } from "./ControlesMapa.native";
+import ControlesMapa, {
+  RANGOS_HORARIOS,
+} from "./ControlesMapa.native";
+
 import {
   CapaDelitos,
+  CapaConcentracionDelitos,
   CapaRedPeatonal,
   CapaPuntosRuta,
   CapaZonasRiesgo,
@@ -26,36 +29,55 @@ import {
   type PuntoRuta,
   type ZonaRiesgo,
 } from "./CapasMapa.native";
+
 import { API_BASE_URL } from "./api";
+
 import {
   analizarPuntoSeleccionado,
   claveZonaRiesgo,
   type ZonaProxima,
 } from "./zonas";
+
 import {
   buscarDirecciones,
   type DestinoRuta,
   type ResultadoDireccion,
 } from "../direccion";
+
+import { obtenerVisibilidadCapas } from "../visibilidad-capas";
+
+import CabeceraMapa from "./CabeceraMapa.native";
+import ControlesCapas from "./ControlesCapas.native";
+import PanelResultados from "./PanelResultados.native";
+
 const REGION_INICIAL: Region = {
   latitude: -33.0245,
   longitude: -71.5518,
   latitudeDelta: 0.08,
   longitudeDelta: 0.08,
 };
-const COMUNAS = ["Viña del Mar", "Concón", "Valparaíso"];
+
+const COMUNAS = [
+  "Viña del Mar",
+  "Concón",
+  "Valparaíso",
+];
+
 type Carga<T> = {
   data?: T[];
 };
+
 type RutaAlternativa = {
   perfil_ruta: string;
   nombre_perfil_ruta?: string;
+  es_ruta_principal?: boolean;
   geometria?: unknown;
   distancia_metros?: number;
   tiempo_estimado_minutos?: number;
   nivel_riesgo?: string;
   puntaje_riesgo?: number;
 };
+
 type InterpretacionIA = {
   disponible: boolean;
   resumen_general?: string;
@@ -74,25 +96,40 @@ type InterpretacionIA = {
 type ResultadoRuta = {
   encontrada?: boolean;
   cantidad_rutas?: number;
+  perfil_principal?: string;
   rutas?: RutaAlternativa[];
   mensaje?: string;
   message?: string;
   interpretacion_ia?: InterpretacionIA;
 };
-function normalizarGeometria(value: unknown): Array<[number, number]> {
+
+function normalizarGeometria(
+  value: unknown,
+): Array<[number, number]> {
   if (!Array.isArray(value)) return [];
+
   return value.flatMap((point): Array<[number, number]> => {
     if (!Array.isArray(point) || point.length < 2) return [];
+
     const lat = Number(point[0]);
     const lon = Number(point[1]);
+
     return Number.isFinite(lat) && Number.isFinite(lon)
       ? [[lat, lon]]
       : [];
   });
 }
-function enRango(value: number, center: number, delta: number) {
-  return Math.abs(value - center) <= delta / 2 + delta * 0.08;
+
+function enRango(
+  value: number,
+  center: number,
+  delta: number,
+) {
+  return (
+    Math.abs(value - center) <= delta / 2 + delta * 0.08
+  );
 }
+
 function estaEnVista(
   lat: number | string,
   lon: number | string,
@@ -100,6 +137,7 @@ function estaEnVista(
 ) {
   const latitude = Number(lat);
   const longitude = Number(lon);
+
   return (
     Number.isFinite(latitude) &&
     Number.isFinite(longitude) &&
@@ -107,8 +145,10 @@ function estaEnVista(
     enRango(longitude, region.longitude, region.longitudeDelta)
   );
 }
+
 function zoomEstimado(region: Region) {
   const anchoDp = Dimensions.get("window").width;
+
   return Math.round(
     Math.log2(
       (360 * anchoDp) /
@@ -116,55 +156,55 @@ function zoomEstimado(region: Region) {
     ),
   );
 }
+
 function bboxVisible(region: Region) {
-  const sur = Math.max(-90, region.latitude - region.latitudeDelta / 2);
-  const oeste = Math.max(-180, region.longitude - region.longitudeDelta / 2);
-  const norte = Math.min(90, region.latitude + region.latitudeDelta / 2);
-  const este = Math.min(180, region.longitude + region.longitudeDelta / 2);
+  const sur = Math.max(
+    -90,
+    region.latitude - region.latitudeDelta / 2,
+  );
+
+  const oeste = Math.max(
+    -180,
+    region.longitude - region.longitudeDelta / 2,
+  );
+
+  const norte = Math.min(
+    90,
+    region.latitude + region.latitudeDelta / 2,
+  );
+
+  const este = Math.min(
+    180,
+    region.longitude + region.longitudeDelta / 2,
+  );
+
   return [sur, oeste, norte, este]
     .map((value) => value.toFixed(6))
     .join(",");
 }
+
 function valor(value: unknown, fallback = "No informado") {
   return value === null || value === undefined || value === ""
     ? fallback
     : String(value);
 }
+
 function colorPerfilRuta(perfil: string): string {
   switch (perfil) {
     case "menor_riesgo":
       return "#16a34a";
+
     case "equilibrada":
       return "#2563eb";
+
     case "mas_rapida":
       return "#ea580c";
+
     default:
       return "#64748b";
   }
 }
-function nombrePerfilRuta(ruta: RutaAlternativa): string {
-  if (ruta.nombre_perfil_ruta) {
-    return ruta.nombre_perfil_ruta;
-  }
-  switch (ruta.perfil_ruta) {
-    case "menor_riesgo":
-      return "Menor riesgo";
-    case "equilibrada":
-      return "Equilibrada";
-    case "mas_rapida":
-      return "Más rápida";
-    default:
-      return "Ruta alternativa";
-  }
-}
-function formatearDistancia(distancia: number | undefined): string {
-  if (distancia === undefined || !Number.isFinite(distancia)) {
-    return "No disponible";
-  }
-  return distancia >= 1000
-    ? `${(distancia / 1000).toFixed(2)} km`
-    : `${Math.round(distancia)} m`;
-}
+
 function FichaElemento({
   elemento,
   cerrar,
@@ -179,6 +219,13 @@ function FichaElemento({
           ["Comuna", elemento.datos.comuna],
           ["Cantidad de delitos", elemento.datos.cantidad_delitos],
           ["Puntaje final", elemento.datos.puntajeFinal],
+          [
+            "Agrupación",
+            elemento.datos.metodo_agrupacion ===
+            "coordenadas_reportadas_identicas"
+              ? "Dos coordenadas reportadas idénticas"
+              : "DBSCAN",
+          ],
         ]
       : elemento.tipo === "delito"
         ? [
@@ -188,31 +235,72 @@ function FichaElemento({
             ["Lugar", elemento.datos.lugar],
             ["Comuna", elemento.datos.comuna],
           ]
-        : [
-            ["Nombre", elemento.datos.nombre],
-            ["Tipo", elemento.datos.tipo],
-            ["Categoría peatonal", elemento.datos.categoria_peatonal],
-            ["Comuna", elemento.datos.comuna],
-            ["Superficie", elemento.datos.superficie],
-            [
-              "Longitud",
-              elemento.datos.longitud_metros === undefined
-                ? undefined
-                : `${elemento.datos.longitud_metros} m`,
-            ],
-            ["Nodo inicio", elemento.datos.nodo_inicio],
-            ["Nodo fin", elemento.datos.nodo_fin],
-          ];
+        : elemento.tipo === "concentracion"
+          ? [
+              [
+                "Cantidad de registros",
+                elemento.datos.cantidad_delitos,
+              ],
+              ["Rango horario", elemento.datos.rango_horario],
+              ["Latitud reportada", elemento.datos.latitud],
+              ["Longitud reportada", elemento.datos.longitud],
+            ]
+          : [
+              ["Nombre", elemento.datos.nombre],
+              ["Tipo", elemento.datos.tipo],
+              [
+                "Categoría peatonal",
+                elemento.datos.categoria_peatonal,
+              ],
+              ["Comuna", elemento.datos.comuna],
+              ["Superficie", elemento.datos.superficie],
+              [
+                "Longitud",
+                elemento.datos.longitud_metros === undefined
+                  ? undefined
+                  : `${elemento.datos.longitud_metros} m`,
+              ],
+              ["Nodo inicio", elemento.datos.nodo_inicio],
+              ["Nodo fin", elemento.datos.nodo_fin],
+            ];
+
   const title =
     elemento.tipo === "zona"
       ? "Zona de riesgo"
       : elemento.tipo === "delito"
         ? "Evento delictual"
-        : "Segmento peatonal";
+        : elemento.tipo === "concentracion"
+          ? "Concentración de delitos"
+          : "Segmento peatonal";
+
+  const esZona = elemento.tipo === "zona";
+  const nivelZona = esZona
+    ? valor(elemento.datos.nivel, "No informado")
+    : "";
+  const colorNivel =
+    nivelZona.toLowerCase() === "alto"
+      ? "#B93832"
+      : nivelZona.toLowerCase() === "medio"
+        ? "#A76A0A"
+        : "#14765B";
+
   return (
-    <View style={styles.infoCard}>
+    <View style={[styles.infoCard, esZona && styles.zoneInfoCard]}>
       <View style={styles.infoHeader}>
-        <Text style={styles.infoTitle}>{title}</Text>
+        <View style={styles.infoHeadingCopy}>
+          <Text style={styles.infoEyebrow}>DETALLE DEL MAPA</Text>
+          <Text style={styles.infoTitle}>{title}</Text>
+        </View>
+
+        {esZona && (
+          <View style={[styles.levelBadge, { backgroundColor: `${colorNivel}14` }]}>
+            <View style={[styles.levelDot, { backgroundColor: colorNivel }]} />
+            <Text style={[styles.levelBadgeText, { color: colorNivel }]}>
+              {nivelZona}
+            </Text>
+          </View>
+        )}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Cerrar información"
@@ -222,70 +310,157 @@ function FichaElemento({
           <Text style={styles.close}>×</Text>
         </Pressable>
       </View>
-      {fields.map(([label, content]) => (
-        <Text key={label} style={styles.infoLine}>
-          <Text style={styles.infoLabel}>{label}: </Text>
-          {valor(content)}
-        </Text>
-      ))}
+
+      {esZona ? (
+        <>
+          <View style={styles.zoneStatsGrid}>
+            {fields.slice(0, 4).map(([label, content]) => (
+              <View key={label} style={styles.zoneStat}>
+                <Text style={styles.zoneStatLabel}>{label}</Text>
+                <Text numberOfLines={1} style={styles.zoneStatValue}>
+                  {valor(content)}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <Text numberOfLines={1} style={styles.zoneMethod}>
+            <Text style={styles.infoLabel}>Agrupación · </Text>
+            {valor(fields[4]?.[1])}
+          </Text>
+        </>
+      ) : (
+        fields.map(([label, content]) => (
+          <Text key={label} style={styles.infoLine}>
+            <Text style={styles.infoLabel}>{label}: </Text>
+            {valor(content)}
+          </Text>
+        ))
+      )}
+
+      {elemento.tipo === "concentracion" && (
+        <>
+          <Text style={styles.infoLine}>
+            <Text style={styles.infoLabel}>Ubicación: </Text>
+            Coordenada reportada; no representa un punto físico exacto.
+          </Text>
+
+          {elemento.datos.delitos.map((delito, index) => (
+            <Text
+              key={delito.id ?? index}
+              style={styles.infoLine}
+            >
+              {`Registro ${index + 1}: ${valor(delito.fecha, "Fecha no informada")} · ${valor(delito.grupo_delito, "Grupo no informado")} · ${valor(delito.lugar, "Lugar no informado")}`}
+            </Text>
+          ))}
+        </>
+      )}
     </View>
   );
 }
-export default function MapaRiesgo() {
+
+export type PerfilRuta =
+  | "menor_riesgo"
+  | "equilibrada"
+  | "mas_rapida";
+
+export default function MapaRiesgo({
+  perfilInicial = "menor_riesgo",
+}:{
+  perfilInicial?: PerfilRuta;
+}){
   const mapRef = useRef<MapView>(null);
   const redAbort = useRef<AbortController | null>(null);
   const redConsultaKey = useRef<string | null>(null);
   const cargaId = useRef(0);
+
   const [region, setRegion] = useState(REGION_INICIAL);
   const [comuna, setComuna] = useState<string | null>(null);
   const [horario, setHorario] = useState("20:00 - 23:59");
+
   const [zonas, setZonas] = useState<ZonaRiesgo[]>([]);
   const [delitos, setDelitos] = useState<Delito[]>([]);
-  const [segmentos, setSegmentos] = useState<SegmentoPeatonal[]>([]);
+  const [segmentos, setSegmentos] =
+    useState<SegmentoPeatonal[]>([]);
+
   const [mostrarZonas, setMostrarZonas] = useState(true);
   const [mostrarDelitos, setMostrarDelitos] = useState(false);
+  const [
+    mostrarConcentracionDelitos,
+    setMostrarConcentracionDelitos,
+  ] = useState(false);
   const [mostrarRed, setMostrarRed] = useState(false);
+
   const [cargandoRed, setCargandoRed] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [seleccion, setSeleccion] = useState<ElementoMapa | null>(null);
+
+  const [seleccion, setSeleccion] =
+    useState<ElementoMapa | null>(null);
+
   const [origen, setOrigen] = useState<PuntoRuta | null>(null);
   const [destino, setDestino] = useState<PuntoRuta | null>(null);
-  const [ubicacion, setUbicacion] = useState<PuntoRuta | null>(null);
-  const [cargandoUbicacion, setCargandoUbicacion] = useState(false);
-  const [estadoUbicacion, setEstadoUbicacion] = useState<string | null>(null);
-  const [zonaOrigenDetectada, setZonaOrigenDetectada] = useState<
-    ZonaProxima<ZonaRiesgo> | null | undefined
-  >(undefined);
-  const [zonaDestinoDetectada, setZonaDestinoDetectada] = useState<
-    ZonaProxima<ZonaRiesgo> | null | undefined
-  >(undefined);
+  const [ubicacion, setUbicacion] =
+    useState<PuntoRuta | null>(null);
+
+  const [cargandoUbicacion, setCargandoUbicacion] =
+    useState(false);
+
+  const [estadoUbicacion, setEstadoUbicacion] =
+    useState<string | null>(null);
+
+  const [zonaOrigenDetectada, setZonaOrigenDetectada] =
+    useState<ZonaProxima<ZonaRiesgo> | null | undefined>(
+      undefined,
+    );
+
+  const [zonaDestinoDetectada, setZonaDestinoDetectada] =
+    useState<ZonaProxima<ZonaRiesgo> | null | undefined>(
+      undefined,
+    );
+
   const [modoSeleccion, setModoSeleccion] = useState<
     "origen" | "destino" | null
   >(null);
+
   const [ruta, setRuta] = useState<ResultadoRuta | null>(null);
-  const [rutaSeleccionada, setRutaSeleccionada] = useState<string | null>(null);
+
+  const [rutaSeleccionada, setRutaSeleccionada] =
+    useState<string | null>(null);
+
+  const [perfilPrincipal, setPerfilPrincipal] =
+    useState<string>(perfilInicial);
+
   const [cargandoRuta, setCargandoRuta] = useState(false);
   const [errorRuta, setErrorRuta] = useState<string | null>(null);
+
   const rutaId = useRef(0);
   const rutaAbort = useRef<AbortController | null>(null);
+
   const cancelarRutaPendiente = useCallback(() => {
     rutaId.current += 1;
     rutaAbort.current?.abort();
     rutaAbort.current = null;
     setCargandoRuta(false);
   }, []);
+
   const zoom = zoomEstimado(region);
+
   const seleccionarElemento = useCallback(
     (item: ElementoMapa) => setSeleccion(item),
     [],
   );
+
   const cambiarZonas = useCallback(() => {
     setMostrarZonas((visible) => !visible);
-    setSeleccion((actual) => (actual?.tipo === "zona" ? null : actual));
+
+    setSeleccion((actual) =>
+      actual?.tipo === "zona" ? null : actual,
+    );
   }, []);
+
   const limpiarRuta = useCallback(() => {
     cancelarRutaPendiente();
+
     setOrigen(null);
     setDestino(null);
     setRuta(null);
@@ -293,55 +468,71 @@ export default function MapaRiesgo() {
     setErrorRuta(null);
     setModoSeleccion(null);
     setSeleccion(null);
+
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
   }, [cancelarRutaPendiente]);
+
   const elegirOrigen = useCallback(() => {
     cancelarRutaPendiente();
+
     setDestino(null);
     setRuta(null);
     setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion("origen");
     setSeleccion(null);
+
     setZonaOrigenDetectada(undefined);
     setZonaDestinoDetectada(undefined);
   }, [cancelarRutaPendiente]);
+
   const elegirDestino = useCallback(() => {
     if (!origen) return;
+
     cancelarRutaPendiente();
+
     setDestino(null);
     setRuta(null);
     setRutaSeleccionada(null);
     setErrorRuta(null);
     setModoSeleccion("destino");
     setSeleccion(null);
+
     setZonaDestinoDetectada(undefined);
   }, [origen, cancelarRutaPendiente]);
+
   const solicitarUbicacion = useCallback(async () => {
     setCargandoUbicacion(true);
     setEstadoUbicacion(null);
+
     try {
-      const permiso = await Location.requestForegroundPermissionsAsync();
+      const permiso =
+        await Location.requestForegroundPermissionsAsync();
+
       if (permiso.status !== "granted") {
         setEstadoUbicacion(
           "Permiso denegado. Puedes elegir el origen o destino tocando el mapa.",
         );
         return;
       }
+
       if (!(await Location.hasServicesEnabledAsync())) {
         setEstadoUbicacion(
           "Activa la ubicación del dispositivo o selecciona un punto manualmente en el mapa.",
         );
         return;
       }
+
       const posicion = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
+
       const punto = {
         latitud: posicion.coords.latitude,
         longitud: posicion.coords.longitude,
       };
+
       if (
         !Number.isFinite(punto.latitud) ||
         !Number.isFinite(punto.longitud)
@@ -351,10 +542,14 @@ export default function MapaRiesgo() {
         );
         return;
       }
+
       setUbicacion(punto);
+
       cancelarRutaPendiente();
+
       setOrigen(punto);
       setDestino(null);
+
       setZonaOrigenDetectada(
         analizarPuntoSeleccionado(
           {
@@ -364,11 +559,13 @@ export default function MapaRiesgo() {
           zonas,
         ).zonaProxima,
       );
+
       setZonaDestinoDetectada(undefined);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
       setModoSeleccion("destino");
+
       mapRef.current?.animateToRegion(
         {
           latitude: punto.latitud,
@@ -378,6 +575,7 @@ export default function MapaRiesgo() {
         },
         800,
       );
+
       setEstadoUbicacion(
         "Ubicación actual establecida como origen. Elige o busca un destino.",
       );
@@ -386,6 +584,7 @@ export default function MapaRiesgo() {
         reason instanceof Error
           ? reason.message
           : "No fue posible obtener la ubicación.";
+
       setEstadoUbicacion(
         `${detail} Puedes seleccionar un punto manualmente en el mapa.`,
       );
@@ -393,6 +592,7 @@ export default function MapaRiesgo() {
       setCargandoUbicacion(false);
     }
   }, [zonas, cancelarRutaPendiente]);
+
   const buscarDireccion = useCallback(
     (consulta: string, tipo: DestinoRuta) => {
       if (tipo === "destino" && !origen) {
@@ -400,6 +600,7 @@ export default function MapaRiesgo() {
           "Establece primero un origen para buscar destinos cercanos.",
         );
       }
+
       const referencia =
         tipo === "destino" && origen
           ? origen
@@ -408,10 +609,21 @@ export default function MapaRiesgo() {
               latitud: region.latitude,
               longitud: region.longitude,
             };
-      return buscarDirecciones(API_BASE_URL, consulta, referencia);
+
+      return buscarDirecciones(
+        API_BASE_URL,
+        consulta,
+        referencia,
+      );
     },
-    [origen, ubicacion, region.latitude, region.longitude],
+    [
+      origen,
+      ubicacion,
+      region.latitude,
+      region.longitude,
+    ],
   );
+
   const seleccionarDireccion = useCallback(
     (tipo: DestinoRuta, resultado: ResultadoDireccion) => {
       if (tipo === "destino" && !origen) {
@@ -420,11 +632,14 @@ export default function MapaRiesgo() {
         );
         return;
       }
+
       cancelarRutaPendiente();
+
       const punto = {
         latitud: resultado.latitud,
         longitud: resultado.longitud,
       };
+
       const { zonaProxima } = analizarPuntoSeleccionado(
         {
           latitude: punto.latitud,
@@ -432,21 +647,26 @@ export default function MapaRiesgo() {
         },
         zonas,
       );
+
       setSeleccion(null);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
+
       if (tipo === "origen") {
         setOrigen(punto);
         setDestino(null);
+
         setZonaOrigenDetectada(zonaProxima);
         setZonaDestinoDetectada(undefined);
+
         setModoSeleccion("destino");
       } else {
         setDestino(punto);
         setZonaDestinoDetectada(zonaProxima);
         setModoSeleccion(null);
       }
+
       mapRef.current?.animateToRegion(
         {
           latitude: punto.latitud,
@@ -459,6 +679,7 @@ export default function MapaRiesgo() {
     },
     [origen, zonas, cancelarRutaPendiente],
   );
+
   const seleccionarPuntoMapa = useCallback(
     (event: {
       nativeEvent: {
@@ -469,21 +690,30 @@ export default function MapaRiesgo() {
       };
     }) => {
       if (!modoSeleccion) return;
+
       cancelarRutaPendiente();
-      const { latitude, longitude } = event.nativeEvent.coordinate;
-      const { punto, zonaProxima } = analizarPuntoSeleccionado(
-        { latitude, longitude },
-        zonas,
-      );
+
+      const { latitude, longitude } =
+        event.nativeEvent.coordinate;
+
+      const { punto, zonaProxima } =
+        analizarPuntoSeleccionado(
+          { latitude, longitude },
+          zonas,
+        );
+
       setSeleccion(null);
       setRuta(null);
       setRutaSeleccionada(null);
       setErrorRuta(null);
+
       if (modoSeleccion === "origen") {
         setOrigen(punto);
         setDestino(null);
+
         setZonaOrigenDetectada(zonaProxima);
         setZonaDestinoDetectada(undefined);
+
         setModoSeleccion("destino");
       } else {
         setDestino(punto);
@@ -493,10 +723,13 @@ export default function MapaRiesgo() {
     },
     [modoSeleccion, zonas, cancelarRutaPendiente],
   );
+
   useEffect(() => {
     const id = ++rutaId.current;
+
     rutaAbort.current?.abort();
     rutaAbort.current = null;
+
     if (!origen || !destino) {
       setRuta(null);
       setRutaSeleccionada(null);
@@ -504,43 +737,70 @@ export default function MapaRiesgo() {
       setCargandoRuta(false);
       return;
     }
+
     const controller = new AbortController();
     rutaAbort.current = controller;
+
     setRuta(null);
     setRutaSeleccionada(null);
+
     const params = new URLSearchParams({
       origen_lat: String(origen.latitud),
       origen_lon: String(origen.longitud),
       destino_lat: String(destino.latitud),
       destino_lon: String(destino.longitud),
       rango_horario: horario,
+      perfil_ruta: perfilPrincipal,
     });
+
     if (comuna) {
       params.set("comuna", comuna);
     }
+
     setCargandoRuta(true);
     setErrorRuta(null);
+
     void (async () => {
       try {
         const response = await fetch(
           `${API_BASE_URL}/api/rutas/alternativas?${params.toString()}`,
           { signal: controller.signal },
         );
+
         if (!response.ok) {
           throw new Error(
             `No se pudieron calcular las rutas (HTTP ${response.status}).`,
           );
         }
-        const result = (await response.json()) as ResultadoRuta;
+
+        const result =
+          (await response.json()) as ResultadoRuta;
+
         if (id !== rutaId.current) return;
-        const rutasNormalizadas = (result.rutas ?? []).map((alternativa) => ({
-          ...alternativa,
-          geometria: normalizarGeometria(alternativa.geometria),
-        }));
+
+        const rutasNormalizadas = (result.rutas ?? []).map(
+          (alternativa) => ({
+            ...alternativa,
+            geometria: normalizarGeometria(
+              alternativa.geometria,
+            ),
+          }),
+        );
+
         setRuta({
           ...result,
           rutas: rutasNormalizadas,
         });
+
+        setRutaSeleccionada(
+          result.perfil_principal ??
+            rutasNormalizadas.find(
+              (ruta) => ruta.es_ruta_principal,
+            )?.perfil_ruta ??
+            rutasNormalizadas[0]?.perfil_ruta ??
+            perfilPrincipal,
+        );
+
         if (
           result.encontrada === false ||
           rutasNormalizadas.length === 0
@@ -552,7 +812,13 @@ export default function MapaRiesgo() {
           );
         }
       } catch (reason) {
-        if (controller.signal.aborted || id !== rutaId.current) return;
+        if (
+          controller.signal.aborted ||
+          id !== rutaId.current
+        ) {
+          return;
+        }
+
         setErrorRuta(
           reason instanceof Error
             ? reason.message
@@ -564,27 +830,36 @@ export default function MapaRiesgo() {
         }
       }
     })();
+
     return () => {
       controller.abort();
+
       if (rutaAbort.current === controller) {
         rutaAbort.current = null;
       }
     };
-  }, [origen, destino, horario, comuna]);
+  }, [origen, destino, horario, comuna, perfilPrincipal]);
+
   useEffect(() => {
     if (ruta?.encontrada === false) return;
-    const alternativasParaEncuadrar = (ruta?.rutas ?? []).filter(
+
+    const alternativasParaEncuadrar = (
+      ruta?.rutas ?? []
+    ).filter(
       (alternativa) =>
         rutaSeleccionada === null ||
         alternativa.perfil_ruta === rutaSeleccionada,
     );
+
     const coordenadas: Array<[number, number]> =
       alternativasParaEncuadrar.flatMap((alternativa) =>
         Array.isArray(alternativa.geometria)
           ? (alternativa.geometria as Array<[number, number]>)
           : [],
       );
+
     if (coordenadas.length < 2) return;
+
     mapRef.current?.fitToCoordinates(
       coordenadas.map(([latitude, longitude]) => ({
         latitude,
@@ -592,55 +867,70 @@ export default function MapaRiesgo() {
       })),
       {
         edgePadding: {
-          top: 260,
-          right: 48,
-          bottom: 190,
-          left: 48,
+          top: 125,
+          right: 38,
+          bottom: 300,
+          left: 38,
         },
         animated: true,
       },
     );
   }, [ruta, rutaSeleccionada]);
+
   useEffect(() => {
     if (!RANGOS_HORARIOS.includes(horario)) return;
+
     const id = ++cargaId.current;
     const controller = new AbortController();
+
     setCargando(true);
     setError(null);
-    const query = `rango_horario=${encodeURIComponent(horario)}`;
+
+    const query =
+      `rango_horario=${encodeURIComponent(horario)}`;
+
     const cargar = async () => {
       try {
-        const [respuestasZonas, respuestaDelitos] = await Promise.all([
-          Promise.all(
-            COMUNAS.map((nombre) =>
-              fetch(
-                `${API_BASE_URL}/api/geografia?comuna=${encodeURIComponent(nombre)}&${query}`,
-                { signal: controller.signal },
+        const [respuestasZonas, respuestaDelitos] =
+          await Promise.all([
+            Promise.all(
+              COMUNAS.map((nombre) =>
+                fetch(
+                  `${API_BASE_URL}/api/geografia?comuna=${encodeURIComponent(nombre)}&${query}`,
+                  { signal: controller.signal },
+                ),
               ),
             ),
-          ),
-          fetch(`${API_BASE_URL}/api/delitos?${query}`, {
-            signal: controller.signal,
-          }),
-        ]);
+
+            fetch(`${API_BASE_URL}/api/delitos?${query}`, {
+              signal: controller.signal,
+            }),
+          ]);
+
         const errorResponse = [
           ...respuestasZonas,
           respuestaDelitos,
         ].find((res) => !res.ok);
+
         if (errorResponse) {
           throw new Error(
             `Error del backend (HTTP ${errorResponse.status})`,
           );
         }
-        const [resultadosZonas, resultadoDelitos] = await Promise.all([
-          Promise.all(
-            respuestasZonas.map(
-              (res) => res.json() as Promise<Carga<ZonaRiesgo>>,
+
+        const [resultadosZonas, resultadoDelitos] =
+          await Promise.all([
+            Promise.all(
+              respuestasZonas.map(
+                (res) => res.json() as Promise<Carga<ZonaRiesgo>>,
+              ),
             ),
-          ),
-          respuestaDelitos.json() as Promise<Carga<Delito>>,
-        ]);
+
+            respuestaDelitos.json() as Promise<Carga<Delito>>,
+          ]);
+
         if (id !== cargaId.current) return;
+
         setZonas(
           resultadosZonas.flatMap((result, index) =>
             (result.data ?? []).map((zona) => ({
@@ -649,9 +939,16 @@ export default function MapaRiesgo() {
             })),
           ),
         );
+
         setDelitos(resultadoDelitos.data ?? []);
       } catch (reason) {
-        if (controller.signal.aborted || id !== cargaId.current) return;
+        if (
+          controller.signal.aborted ||
+          id !== cargaId.current
+        ) {
+          return;
+        }
+
         setError(
           reason instanceof Error
             ? reason.message
@@ -663,21 +960,28 @@ export default function MapaRiesgo() {
         }
       }
     };
+
     void cargar();
+
     return () => controller.abort();
   }, [horario]);
+
   const bbox = bboxVisible(region);
   const zoomSuficiente = zoom >= 12;
+
   useEffect(() => {
     if (!mostrarRed || !comuna || !zoomSuficiente) {
       redAbort.current?.abort();
       redAbort.current = null;
       redConsultaKey.current = null;
+
       setSegmentos([]);
       setCargandoRed(false);
       return;
     }
+
     const consultaKey = `${comuna}|${bbox}`;
+
     if (
       redConsultaKey.current === consultaKey &&
       redAbort.current &&
@@ -685,32 +989,47 @@ export default function MapaRiesgo() {
     ) {
       return;
     }
+
     redAbort.current?.abort();
+
     const controller = new AbortController();
+
     redAbort.current = controller;
     redConsultaKey.current = consultaKey;
+
     setSegmentos([]);
     setCargandoRed(true);
     setError(null);
+
     const timer = setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ comuna, bbox });
+        const params = new URLSearchParams({
+          comuna,
+          bbox,
+        });
+
         const response = await fetch(
           `${API_BASE_URL}/api/geografia/red-peatonal?${params.toString()}`,
           { signal: controller.signal },
         );
+
         if (!response.ok) {
           throw new Error(
             `Error red peatonal (HTTP ${response.status})`,
           );
         }
-        const result = (await response.json()) as Carga<SegmentoPeatonal>;
+
+        const result =
+          (await response.json()) as Carga<SegmentoPeatonal>;
+
         if (!controller.signal.aborted) {
           setSegmentos(result.data ?? []);
         }
       } catch (reason) {
         if (controller.signal.aborted) return;
+
         setSegmentos([]);
+
         setError(
           reason instanceof Error
             ? reason.message
@@ -722,34 +1041,54 @@ export default function MapaRiesgo() {
         }
       }
     }, 400);
+
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
   }, [bbox, comuna, mostrarRed, zoomSuficiente]);
-  const cambiarComuna = useCallback((nombre: string | null) => {
-    setSegmentos([]);
-    setComuna(nombre);
-    setSeleccion(null);
-  }, []);
+
+  const cambiarComuna = useCallback(
+    (nombre: string | null) => {
+      setSegmentos([]);
+      setComuna(nombre);
+      setSeleccion(null);
+    },
+    [],
+  );
+
   const zonasVisibles = zonas.filter((zona) =>
     estaEnVista(zona.latitud, zona.longitud, region),
   );
+
+  const capasVisibles = obtenerVisibilidadCapas(
+    {
+      delitosIndividuales: mostrarDelitos,
+      concentracionDelitos: mostrarConcentracionDelitos,
+      zonasRiesgo: mostrarZonas,
+    },
+    zoom,
+  );
+
   const delitosVisibles =
-    mostrarDelitos && zoom >= 13
+    capasVisibles.delitosIndividuales ||
+    capasVisibles.concentracionDelitos
       ? delitos.filter((delito) =>
           estaEnVista(delito.latitud, delito.longitud, region),
         )
       : [];
+
   const rutasParaDibujar = (ruta?.rutas ?? []).filter(
     (alternativa) =>
       rutaSeleccionada === null ||
       alternativa.perfil_ruta === rutaSeleccionada,
   );
-  const clavePuntosRuta = origen && destino
-    ? `${origen.latitud},${origen.longitud}:${destino.latitud},${destino.longitud}`
-    : "sin-puntos";
-  return (
+
+  const clavePuntosRuta =
+    origen && destino
+      ? `${origen.latitud},${origen.longitud}:${destino.latitud},${destino.longitud}`
+      : "sin-puntos";
+        return (
     <View style={styles.container}>
       <MapView
         key={`map-zonas-${mostrarZonas}-ruta-${rutaSeleccionada ?? "todas"}-${clavePuntosRuta}`}
@@ -763,7 +1102,9 @@ export default function MapaRiesgo() {
         showsCompass
         showsScale
         onPress={seleccionarPuntoMapa}
-        onRegionChangeComplete={(nextRegion) => setRegion(nextRegion)}
+        onRegionChangeComplete={(nextRegion) =>
+          setRegion(nextRegion)
+        }
       >
         {mostrarRed && comuna !== null && zoom >= 12 && (
           <CapaRedPeatonal
@@ -771,11 +1112,20 @@ export default function MapaRiesgo() {
             onSeleccionar={seleccionarElemento}
           />
         )}
-        {mostrarZonas && (
+
+        {delitosVisibles.length > 0 &&
+          capasVisibles.delitosIndividuales && (
+            <CapaDelitos
+              delitos={delitosVisibles}
+              onSeleccionar={seleccionarElemento}
+            />
+          )}
+
+        {capasVisibles.zonasRiesgo && (
           <CapaZonasRiesgo
             zonas={zonasVisibles}
             zoom={zoom}
-            visible={mostrarZonas}
+            visible={capasVisibles.zonasRiesgo}
             onSeleccionar={seleccionarElemento}
             zonaOrigenSeleccionada={
               zonaOrigenDetectada
@@ -790,37 +1140,76 @@ export default function MapaRiesgo() {
             habilitarSeleccionZona={!modoSeleccion}
           />
         )}
-        {delitosVisibles.length > 0 && (
-          <CapaDelitos
-            delitos={delitosVisibles}
-            onSeleccionar={seleccionarElemento}
-          />
-        )}
+
+        {delitosVisibles.length > 0 &&
+          capasVisibles.concentracionDelitos && (
+            <CapaConcentracionDelitos
+              delitos={delitosVisibles}
+              rangoHorario={horario}
+              onSeleccionar={seleccionarElemento}
+            />
+          )}
+
         {[...rutasParaDibujar]
           .reverse()
           .map((alternativa) => {
-            const geometria = Array.isArray(alternativa.geometria)
-              ? (alternativa.geometria as Array<[number, number]>)
+            const geometria = Array.isArray(
+              alternativa.geometria,
+            )
+              ? (alternativa.geometria as Array<
+                  [number, number]
+                >)
               : [];
+
             if (geometria.length < 2) return null;
+
             return (
               <Polyline
                 key={`${clavePuntosRuta}-${alternativa.perfil_ruta}-${rutaSeleccionada ?? "todas"}`}
-                coordinates={geometria.map(([latitude, longitude]) => ({
-                  latitude,
-                  longitude,
-                }))}
-                strokeColor={colorPerfilRuta(alternativa.perfil_ruta)}
+                coordinates={geometria.map(
+                  ([latitude, longitude]) => ({
+                    latitude,
+                    longitude,
+                  }),
+                )}
+                strokeColor={colorPerfilRuta(
+                  alternativa.perfil_ruta,
+                )}
                 strokeWidth={6}
               />
             );
           })}
+
         <CapaPuntosRuta
           origen={origen}
           destino={destino}
           ubicacion={ubicacion}
         />
       </MapView>
+
+      <CabeceraMapa />
+
+      <ControlesCapas
+        zonas={mostrarZonas}
+        onZonas={cambiarZonas}
+        concentraciones={mostrarConcentracionDelitos}
+        onConcentraciones={() =>
+          setMostrarConcentracionDelitos((visible) => !visible)
+        }
+        delitos={mostrarDelitos}
+        onDelitos={() =>
+          setMostrarDelitos((visible) => !visible)
+        }
+        red={mostrarRed}
+        onRed={() =>
+          setMostrarRed((visible) => !visible)
+        }
+        comuna={comuna}
+        zoom={zoom}
+        cargandoUbicacion={cargandoUbicacion}
+        onSolicitarUbicacion={solicitarUbicacion}
+      />
+
       <ControlesMapa
         origen={origen}
         destino={destino}
@@ -831,10 +1220,10 @@ export default function MapaRiesgo() {
             : modoSeleccion === "destino"
               ? "Toca el mapa para marcar el destino."
               : origen && !destino
-                ? "Origen seleccionado. Elige destino y toca el mapa."
+                ? "Origen seleccionado. Elige un destino en el mapa o búscalo por dirección."
                 : origen && destino
-                  ? "Origen y destino seleccionados."
-                  : "Elige origen para comenzar una ruta."
+                  ? "Origen y destino seleccionados. Las alternativas se actualizan automáticamente."
+                  : "Selecciona un origen en el mapa o utiliza tu ubicación actual."
         }
         onElegirOrigen={elegirOrigen}
         onElegirDestino={elegirDestino}
@@ -843,292 +1232,74 @@ export default function MapaRiesgo() {
         onComuna={cambiarComuna}
         horario={horario}
         onHorario={setHorario}
-        zonas={mostrarZonas}
-        onZonas={cambiarZonas}
-        delitos={mostrarDelitos}
-        onDelitos={() => setMostrarDelitos((visible) => !visible)}
-        red={mostrarRed}
-        onRed={() => setMostrarRed((visible) => !visible)}
+        perfilRuta={perfilPrincipal}
+        onPerfilRuta={setPerfilPrincipal}
         cargando={cargando || cargandoRed}
+        cargandoRuta={cargandoRuta}
+        resultadoDisponible={Boolean(ruta) || Boolean(errorRuta)}
         error={error}
-        zoom={zoom}
-        onSolicitarUbicacion={solicitarUbicacion}
-        cargandoUbicacion={cargandoUbicacion}
         estadoUbicacion={estadoUbicacion}
+        cargandoUbicacion={cargandoUbicacion}
+        onSolicitarUbicacion={solicitarUbicacion}
+        zonaOrigenMensaje={
+          zonaOrigenDetectada
+            ? `Origen: zona ${zonaOrigenDetectada.zona.nivel} a ${Math.round(zonaOrigenDetectada.distanciaMetros)} m`
+            : null
+        }
+        zonaDestinoMensaje={
+          zonaDestinoDetectada
+            ? `Destino: zona ${zonaDestinoDetectada.zona.nivel} a ${Math.round(zonaDestinoDetectada.distanciaMetros)} m`
+            : null
+        }
         onBuscarDireccion={buscarDireccion}
         onSeleccionarDireccion={seleccionarDireccion}
-      />
+        infoMapa={
+          seleccion ? (
+            <FichaElemento
+              elemento={seleccion}
+              cerrar={() => setSeleccion(null)}
+            />
+          ) : null
+        }
+      >
+        <PanelResultados
+          origenCompleto={Boolean(origen && destino)}
+          resultado={ruta}
+          cargando={cargandoRuta}
+          error={errorRuta}
+          rutaSeleccionada={rutaSeleccionada}
+          onSeleccionarRuta={setRutaSeleccionada}
+        />
+      </ControlesMapa>
+
       {cargando && (
-        <View pointerEvents="none" style={styles.loading}>
-          <ActivityIndicator size="small" color="#1d4ed8" />
+        <View
+          pointerEvents="none"
+          style={styles.loading}
+        >
+          <ActivityIndicator
+            size="small"
+            color="#1d4ed8"
+          />
         </View>
       )}
+
       {cargandoRuta && (
         <View
           pointerEvents="none"
-          style={[styles.loading, { top: 202 }]}
+          style={[styles.loading, { top: 196 }]}
         >
-          <ActivityIndicator size="small" color="#16a34a" />
+          <ActivityIndicator
+            size="small"
+            color="#16a34a"
+          />
         </View>
       )}
-      {seleccion && (
-        <FichaElemento
-          elemento={seleccion}
-          cerrar={() => setSeleccion(null)}
-        />
-      )}
-      {(zonaOrigenDetectada || zonaDestinoDetectada) &&
-        !seleccion &&
-        !cargandoRuta &&
-        !(ruta?.rutas && ruta.rutas.length > 0) && (
-          <View
-            style={[
-              styles.zoneAssociationCard,
-              (ruta || errorRuta) && styles.zoneAssociationAboveRoute,
-            ]}
-          >
-            {zonaOrigenDetectada && (
-              <Text
-                style={[
-                  styles.zoneAssociationLine,
-                  styles.originAssociation,
-                ]}
-              >
-                {`Origen: zona ${zonaOrigenDetectada.zona.nivel} a ${Math.round(zonaOrigenDetectada.distanciaMetros)} m`}
-              </Text>
-            )}
-            {zonaDestinoDetectada && (
-              <Text
-                style={[
-                  styles.zoneAssociationLine,
-                  styles.destinationAssociation,
-                ]}
-              >
-                {`Destino: zona ${zonaDestinoDetectada.zona.nivel} a ${Math.round(zonaDestinoDetectada.distanciaMetros)} m`}
-              </Text>
-            )}
-          </View>
-        )}
-      {(ruta || errorRuta || (origen && destino && cargandoRuta)) &&
-        !seleccion && (
-          <View style={styles.routeCard}>
-            <Text style={styles.routeTitle}>Alternativas de ruta</Text>
-            <ScrollView
-              style={styles.routeList}
-              contentContainerStyle={styles.routeListContent}
-              showsVerticalScrollIndicator
-            >
-              {cargandoRuta && (
-                <View style={styles.routeStatusRow}>
-                  <ActivityIndicator size="small" color="#2563eb" />
-                  <Text
-                    accessibilityLiveRegion="polite"
-                    style={[styles.routeLine, styles.routeLoading]}
-                  >
-                    Calculando alternativas...
-                  </Text>
-                </View>
-              )}
-              {!cargandoRuta && errorRuta && (
-                <Text
-                  accessibilityLiveRegion="assertive"
-                  style={[styles.routeLine, styles.routeError]}
-                >
-                  {errorRuta}
-                </Text>
-              )}
-              {!cargandoRuta &&
-                !errorRuta &&
-                (ruta?.rutas ?? []).length > 0 && (
-                  <Text
-                    accessibilityLiveRegion="polite"
-                    style={styles.routeSummary}
-                  >
-                    Se encontraron{" "}
-                    {ruta?.cantidad_rutas ?? ruta?.rutas?.length ?? 0}{" "}
-                    alternativas. Selecciona una para mostrar solo esa ruta.
-                  </Text>
-                )}
-              {!cargandoRuta &&
-                !errorRuta &&
-                (ruta?.rutas?.length ?? 0) > 0 &&
-                ruta?.mensaje && (
-                  <View style={styles.routeWarning}>
-                    <Text
-                      accessibilityLiveRegion="polite"
-                      style={styles.routeWarningText}
-                    >
-                      {ruta.mensaje}
-                    </Text>
-                  </View>
-                )}
-              {!cargandoRuta &&
-                !errorRuta &&
-                ruta?.interpretacion_ia?.disponible === true && (
-                  <View style={styles.aiCard}>
-                    <Text style={styles.aiEyebrow}>ANÁLISIS DE IA</Text>
-                    <Text style={styles.aiTitle}>
-                      Recomendación de RutaSegura
-                    </Text>
 
-                    {ruta.interpretacion_ia.recomendacion && (
-                      <View style={styles.aiRecommendation}>
-                        <Text style={styles.aiSectionTitle}>
-                          Ruta recomendada
-                        </Text>
-                        <Text style={styles.aiRecommendationName}>
-                          {(ruta.rutas ?? []).find(
-                            (alternativa) =>
-                              alternativa.perfil_ruta ===
-                              ruta.interpretacion_ia?.recomendacion?.perfil_ruta,
-                          )
-                            ? nombrePerfilRuta(
-                                (ruta.rutas ?? []).find(
-                                  (alternativa) =>
-                                    alternativa.perfil_ruta ===
-                                    ruta.interpretacion_ia?.recomendacion?.perfil_ruta,
-                                )!,
-                              )
-                            : ruta.interpretacion_ia.recomendacion.perfil_ruta}
-                        </Text>
-                        <Text style={styles.aiBody}>
-                          {ruta.interpretacion_ia.recomendacion.motivo}
-                        </Text>
-                      </View>
-                    )}
-
-                    {!!ruta.interpretacion_ia.resumen_general && (
-                      <>
-                        <Text style={styles.aiSectionTitle}>
-                          Resumen general
-                        </Text>
-                        <Text style={styles.aiBody}>
-                          {ruta.interpretacion_ia.resumen_general}
-                        </Text>
-                      </>
-                    )}
-
-                    {!!ruta.interpretacion_ia.consideraciones?.length && (
-                      <>
-                        <Text style={styles.aiSectionTitle}>
-                          Consideraciones
-                        </Text>
-                        {ruta.interpretacion_ia.consideraciones.map(
-                          (consideracion, index) => (
-                            <Text
-                              key={`${index}-${consideracion}`}
-                              style={styles.aiConsideration}
-                            >
-                              {`• ${consideracion}`}
-                            </Text>
-                          ),
-                        )}
-                      </>
-                    )}
-                  </View>
-                )}
-              {!cargandoRuta &&
-                !errorRuta &&
-                ruta?.interpretacion_ia?.disponible === false && (
-                  <View style={styles.aiUnavailable}>
-                    <Text style={styles.aiUnavailableText}>
-                      {ruta.interpretacion_ia.mensaje ??
-                        "La interpretación de IA no está disponible. Puedes consultar las rutas igualmente."}
-                    </Text>
-                  </View>
-                )}
-              {!cargandoRuta &&
-                !errorRuta &&
-                (ruta?.rutas ?? []).map((alternativa) => {
-                  const color = colorPerfilRuta(alternativa.perfil_ruta);
-                  const seleccionada =
-                    rutaSeleccionada === alternativa.perfil_ruta;
-                  const recomendadaPorIA =
-                    ruta?.interpretacion_ia?.disponible === true &&
-                    ruta.interpretacion_ia.recomendacion?.perfil_ruta ===
-                      alternativa.perfil_ruta;
-                  const comparacionIA =
-                    ruta?.interpretacion_ia?.comparaciones?.find(
-                      (comparacion) =>
-                        comparacion.perfil_ruta === alternativa.perfil_ruta,
-                    );
-                  return (
-                    <Pressable
-                      key={alternativa.perfil_ruta}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Seleccionar ruta ${nombrePerfilRuta(alternativa)}`}
-                      accessibilityState={{ selected: seleccionada }}
-                      onPress={() =>
-                        setRutaSeleccionada((actual) =>
-                          actual === alternativa.perfil_ruta
-                            ? null
-                            : alternativa.perfil_ruta,
-                        )
-                      }
-                      style={[
-                        styles.alternativeCard,
-                        { borderLeftColor: color },
-                        seleccionada && styles.alternativeCardSelected,
-                      ]}
-                    >
-                      <View style={styles.alternativeHeader}>
-                        <Text style={[styles.alternativeTitle, { color }]}>
-                          {nombrePerfilRuta(alternativa)}
-                        </Text>
-                        {recomendadaPorIA && (
-                          <Text style={styles.aiRecommendedBadge}>
-                            Recomendada por IA
-                          </Text>
-                        )}
-                        {seleccionada && (
-                          <Text style={[styles.selectedRouteLabel, { color }]}>
-                            ✓ Seleccionada
-                          </Text>
-                        )}
-                      </View>
-                      <Text style={styles.routeLine}>
-                        Distancia:{" "}
-                        {formatearDistancia(alternativa.distancia_metros)}
-                      </Text>
-                      <Text style={styles.routeLine}>
-                        Tiempo estimado:{" "}
-                        {alternativa.tiempo_estimado_minutos !== undefined &&
-                        Number.isFinite(
-                          alternativa.tiempo_estimado_minutos,
-                        )
-                          ? `${alternativa.tiempo_estimado_minutos.toFixed(1)} min`
-                          : "No disponible"}
-                      </Text>
-                      <Text style={styles.routeLine}>
-                        Nivel de riesgo:{" "}
-                        {alternativa.nivel_riesgo ?? "No informado"}
-                      </Text>
-                      <Text style={styles.routeLine}>
-                        Puntaje de riesgo:{" "}
-                        {alternativa.puntaje_riesgo !== undefined &&
-                        Number.isFinite(alternativa.puntaje_riesgo)
-                          ? alternativa.puntaje_riesgo.toFixed(2)
-                          : "No disponible"}
-                      </Text>
-                      {!!comparacionIA?.explicacion && (
-                        <View style={styles.aiComparison}>
-                          <Text style={styles.aiComparisonTitle}>
-                            Análisis de esta ruta
-                          </Text>
-                          <Text style={styles.aiBody}>
-                            {comparacionIA.explicacion}
-                          </Text>
-                        </View>
-                      )}
-                    </Pressable>
-                  );
-                })}
-            </ScrollView>
-          </View>
-        )}
     </View>
   );
 }
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1137,270 +1308,127 @@ const styles = StyleSheet.create({
   loading: {
     position: "absolute",
     right: 18,
-    top: 166,
+    top: 145,
     padding: 8,
     backgroundColor: "white",
     borderRadius: 20,
     elevation: 3,
   },
   infoCard: {
-    position: "absolute",
-    bottom: 22,
-    left: 12,
-    right: 12,
-    maxHeight: "42%",
-    backgroundColor: "white",
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 14,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
+  maxHeight: 360,
+  backgroundColor: "#FFFFFF",
+  opacity: 1,
+  borderRadius: 16,
+  borderWidth: 1,
+  borderColor: "#DCE7E0",
+  paddingHorizontal: 14,
+  paddingTop: 12,
+  paddingBottom: 14,
+  elevation: 20,
+  shadowColor: "#000000",
+  shadowOpacity: 0.18,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 4 },
   },
   infoHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 5,
-  },
-  infoTitle: {
-    color: "#111827",
-    fontWeight: "700",
-    fontSize: 16,
-  },
-  close: {
-    color: "#374151",
-    fontSize: 26,
-    lineHeight: 28,
-  },
-  infoLine: {
-    color: "#374151",
-    fontSize: 13,
-    paddingVertical: 2,
-  },
-  infoLabel: {
-    fontWeight: "700",
-    color: "#111827",
-  },
-  routeCard: {
-    position: "absolute",
-    bottom: 12,
-    left: 12,
-    right: 12,
-    maxHeight: "48%",
-    backgroundColor: "white",
-    borderRadius: 14,
-    padding: 14,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-  },
-  routeList: {
-    flexGrow: 0,
-    maxHeight: 330,
-  },
-  routeListContent: {
-    paddingBottom: 2,
-  },
-  routeSummary: {
-    color: "#4b5563",
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  aiCard: {
-    backgroundColor: "#eff6ff",
-    borderColor: "#bfdbfe",
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 10,
-    marginTop: 7,
-    marginBottom: 5,
-  },
-  aiEyebrow: {
-    color: "#1d4ed8",
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.7,
-  },
-  aiTitle: {
-    color: "#111827",
-    fontSize: 14,
-    fontWeight: "700",
-    marginTop: 3,
-    marginBottom: 5,
-  },
-  aiRecommendation: {
-    backgroundColor: "#ffffff",
-    borderRadius: 7,
-    borderLeftWidth: 3,
-    borderLeftColor: "#2563eb",
-    padding: 8,
-    marginBottom: 5,
-  },
-  aiSectionTitle: {
-    color: "#111827",
-    fontSize: 12,
-    fontWeight: "700",
-    marginTop: 4,
-    marginBottom: 2,
-  },
-  aiRecommendationName: {
-    color: "#1d4ed8",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  aiBody: {
-    color: "#374151",
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 3,
-  },
-  aiConsideration: {
-    color: "#374151",
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 3,
-  },
-  aiRecommendedBadge: {
-    color: "#15803d",
-    backgroundColor: "#dcfce7",
-    overflow: "hidden",
-    borderRadius: 5,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    fontSize: 10,
-    fontWeight: "700",
-    marginTop: 3,
-    alignSelf: "flex-start",
-  },
-  aiComparison: {
-    borderTopWidth: 1,
-    borderTopColor: "#dbeafe",
-    paddingTop: 6,
-    marginTop: 7,
-  },
-  aiComparisonTitle: {
-    color: "#111827",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  aiUnavailable: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  aiUnavailableText: {
-    color: "#9a3412",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  routeWarning: {
-    backgroundColor: "#fff7ed",
-    borderColor: "#fed7aa",
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  routeWarningText: {
-    color: "#9a3412",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  alternativeCard: {
-    borderLeftWidth: 4,
-    borderRadius: 7,
-    backgroundColor: "#f9fafb",
-    paddingLeft: 9,
-    paddingRight: 8,
-    paddingVertical: 7,
-    marginTop: 7,
-  },
-  alternativeCardSelected: {
-    backgroundColor: "#f0fdf4",
-    borderTopWidth: 1,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderTopColor: "#bbf7d0",
-    borderRightColor: "#bbf7d0",
-    borderBottomColor: "#bbf7d0",
-  },
-  alternativeHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  selectedRouteLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  alternativeTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    paddingBottom: 2,
-  },
-  routeTitle: {
-    color: "#111827",
-    fontWeight: "700",
-    fontSize: 16,
-    marginBottom: 5,
-  },
-  routeLine: {
-    color: "#374151",
-    fontSize: 13,
-    paddingVertical: 2,
-  },
-  routeStatusRow: {
-    flexDirection: "row",
+    justifyContent: "flex-start",
     alignItems: "center",
     gap: 8,
+    marginBottom: 9,
   },
-  routeLoading: {
-    color: "#1d4ed8",
-    fontWeight: "600",
+  infoHeadingCopy: {
+    flex: 1,
+    gap: 2,
   },
-  routeSuccess: {
-    color: "#15803d",
-    fontWeight: "600",
+  infoEyebrow: {
+    color: "#72847A",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 1,
   },
-  routeError: {
-    color: "#b91c1c",
+  infoTitle: {
+    color: "#173F39",
+    fontWeight: "900",
+    fontSize: 15,
   },
-  zoneAssociationCard: {
-    position: "absolute",
-    bottom: 22,
-    left: 12,
-    right: 12,
-    backgroundColor: "rgba(255,255,255,0.96)",
-    borderRadius: 12,
+  levelBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 20,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  levelDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  levelBadgeText: {
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  zoneInfoCard: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    elevation: 6,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderRadius: 18,
+    borderColor: "#DCE8E0",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 18,
   },
-  zoneAssociationAboveRoute: {
-    bottom: "53%",
+  zoneStatsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
   },
-  zoneAssociationLine: {
-    fontSize: 12,
-    fontWeight: "700",
-    paddingVertical: 2,
+  zoneStat: {
+    width: "48%",
+    minHeight: 43,
+    justifyContent: "center",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 11,
+    backgroundColor: "#F3F7F4",
+    borderWidth: 1,
+    borderColor: "#E7EEE8",
   },
-  originAssociation: {
-    color: "#1d4ed8",
+  zoneStatLabel: {
+    color: "#77877D",
+    fontSize: 8,
+    fontWeight: "800",
+    marginBottom: 2,
   },
-  destinationAssociation: {
-    color: "#c2410c",
+  zoneStatValue: {
+    color: "#23483E",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  zoneMethod: {
+    color: "#65776D",
+    fontSize: 9,
+    marginTop: 8,
+  },
+  close: {
+    color: "#426257",
+    fontSize: 22,
+    lineHeight: 24,
+    textAlign: "center",
+    width: 30,
+    height: 30,
+    overflow: "hidden",
+    borderRadius: 15,
+    backgroundColor: "#F0F5F1",
+  },
+  infoLine: {
+    color: "#344D43",
+    fontSize: 13,
+    paddingVertical: 3,
+  },
+  infoLabel: {
+    fontWeight: "800",
+    color: "#173F39",
   },
 });

@@ -267,20 +267,19 @@ export function BotonRedPeatonal({
       type="button"
       onClick={onClick}
       style={{
-        position: "absolute",
-        zIndex: 10000,
-        top: 16,
-        right: 16,
+        position: "relative",
+        flex: "1 1 140px",
+        minHeight: 40,
         border: "1px solid #d1d5db",
         borderRadius: 9,
-        padding: "9px 13px",
+        padding: "9px 12px",
         background: mostrar ? "#2563eb" : "#ffffff",
         color: mostrar ? "#ffffff" : "#111827",
         fontWeight: 700,
         fontSize: 13,
         cursor: "pointer",
         boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
-        whiteSpace: "nowrap",
+        whiteSpace: "normal",
       }}
     >
       {mostrar ? "Ocultar red peatonal" : "Mostrar red peatonal"}
@@ -300,23 +299,55 @@ export function BotonDelitos({
       type="button"
       onClick={onClick}
       style={{
-        position: "absolute",
-        zIndex: 10000,
-        top: 16,
-        right: 185,
+        position: "relative",
+        flex: "1 1 140px",
+        minHeight: 40,
         border: "1px solid #d1d5db",
         borderRadius: 9,
-        padding: "9px 13px",
+        padding: "9px 12px",
         background: mostrar ? "#111827" : "#ffffff",
         color: mostrar ? "#ffffff" : "#111827",
         fontWeight: 700,
         fontSize: 13,
         cursor: "pointer",
         boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
-        whiteSpace: "nowrap",
+        whiteSpace: "normal",
       }}
     >
-      {mostrar ? "Ocultar delitos" : "Mostrar delitos"}
+      {mostrar ? "Ocultar delitos individuales" : "Mostrar delitos individuales"}
+    </button>
+  );
+}
+
+export function BotonConcentracionDelitos({
+  mostrar,
+  onClick,
+}: {
+  mostrar: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={mostrar}
+      onClick={onClick}
+      style={{
+        position: "relative",
+        flex: "1 1 140px",
+        minHeight: 40,
+        border: "1px solid #d1d5db",
+        borderRadius: 9,
+        padding: "9px 12px",
+        background: mostrar ? "#7c3aed" : "#ffffff",
+        color: mostrar ? "#ffffff" : "#111827",
+        fontWeight: 700,
+        fontSize: 13,
+        cursor: "pointer",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.16)",
+        whiteSpace: "normal",
+      }}
+    >
+      {mostrar ? "Ocultar concentración" : "Mostrar concentración de delitos"}
     </button>
   );
 }

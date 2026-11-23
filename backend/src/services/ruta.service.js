@@ -1,8 +1,4 @@
 const {
-  obtenerGrafoPeatonal,
-} = require("./grafo-peatonal.service");
-
-const {
   PERFILES_RUTA,
 } = require("../config/perfiles-ruta.config");
 const {
@@ -10,6 +6,17 @@ const {
   PESO_DISTANCIA,
   PESO_RIESGO,
 } = require("./costo-ruta.service");
+const { clasificarRiesgo } = require("./riesgo.service");
+const { performance } = require("node:perf_hooks");
+const {
+  YEN_MAX_CANDIDATOS,
+  YEN_MAX_BUSQUEDAS_DESVIACION,
+} = require("../config/rutas-alternativas.config");
+const { ejecutarLoteBusqueda } = require("./trabajadores-rutas.service");
+
+const diagnosticoRutasActivo =
+  process.env.NODE_ENV !== "production" &&
+  process.env.RUTASEGURA_DEBUG_ALGORITMOS === "true";
 
 const METROS_POR_GRADO_LATITUD = 111_320;
 
@@ -278,6 +285,9 @@ const obtenerGrafoRuta = async ({
   destino,
   rangoHorario,
 }) => {
+  // Cargar el servicio de datos solo en el proceso que prepara la ruta.
+  // Los workers reciben el grafo ya preparado y no deben inicializar Supabase.
+  const { obtenerGrafoPeatonal } = require("./grafo-peatonal.service");
   const bboxRuta = construirBboxRuta(
     origen,
     destino
@@ -291,34 +301,6 @@ const obtenerGrafoRuta = async ({
   });
 
   return validarGrafoPeatonal(grafo);
-};
-
-/*
- * Cola de prioridad simple para Dijkstra.
- */
-class ColaPrioridad {
-  constructor() {
-    this.items = [];
-  }
-
-  insertar(item, prioridad) {
-    this.items.push({
-      item,
-      prioridad,
-    });
-
-    this.items.sort(
-      (a, b) => a.prioridad - b.prioridad
-    );
-  }
-
-  extraerMinimo() {
-    return this.items.shift();
-  }
-
-  get size() {
-    return this.items.length;
-  }
 };
 
 /*
@@ -379,140 +361,30 @@ const calcularCostoArista = (
 };
 
 /*
- * Algoritmo Dijkstra.
- *
- * Utiliza costo_arista si no hay perfil.
- * Si existe perfil, calcula el costo de cada arista
- * usando las ponderaciones de riesgo y distancia.
+ * Cota inferior geográfica para A*.
+ * Cada distancia de arista se redondea al centímetro más cercano, por lo
+ * que puede quedar hasta 0.005 m por debajo de la distancia geodésica.
+ * Un camino simple usa como máximo N-1 aristas. Restar ese error máximo
+ * acumulado de la distancia Haversine mantiene la cota por debajo de la
+ * suma de distancias de cualquier camino simple. Como riesgo >= 0,
+ * cada costo operativo es >= pesoDistancia * distanciaArista.
  */
-const dijkstra = ({
-  nodos,
-  aristas,
-  nodoOrigen,
-  nodoDestino,
-  perfil = null,
-}) => {
-  const adyacencia = construirAdyacencia(aristas);
+const heuristicaAStar = ({ nodo, nodoDestino, nodosMap, pesoDistancia, cantidadNodos }) => {
+  if (nodo === nodoDestino || pesoDistancia === 0) return 0;
+  const actual = nodosMap.get(nodo);
+  const destino = nodosMap.get(nodoDestino);
+  if (!actual || !destino) return 0;
 
-  const nodosMap = new Map(
-    nodos.map((nodo) => [nodo.id, nodo])
+  const distanciaDirecta = distanciaHaversine(
+    actual.latitud,
+    actual.longitud,
+    destino.latitud,
+    destino.longitud
   );
+  if (!Number.isFinite(distanciaDirecta)) return 0;
 
-  const distancias = new Map();
-  const anteriores = new Map();
-  const aristasAnteriores = new Map();
-
-  for (const idNodo of nodosMap.keys()) {
-    distancias.set(idNodo, Infinity);
-  }
-
-  distancias.set(nodoOrigen, 0);
-
-  const cola = new ColaPrioridad();
-  cola.insertar(nodoOrigen, 0);
-
-  while (cola.size > 0) {
-    const actual = cola.extraerMinimo();
-    const nodoActual = actual.item;
-    const distanciaActual = actual.prioridad;
-
-    if (
-      distanciaActual >
-      distancias.get(nodoActual)
-    ) {
-      continue;
-    }
-
-    if (nodoActual === nodoDestino) {
-      break;
-    }
-
-    const vecinos =
-      adyacencia.get(nodoActual) || [];
-
-    for (const vecino of vecinos) {
-      let costo;
-      try {
-        costo = calcularCostoArista(vecino.arista, perfil);
-      } catch {
-        continue;
-      }
-
-      if (
-        !Number.isFinite(costo) ||
-        costo < 0
-      ) {
-        continue;
-      }
-
-      const nuevaDistancia =
-        distanciaActual + costo;
-
-      const distanciaAnterior =
-        distancias.get(vecino.nodo);
-
-      if (nuevaDistancia < distanciaAnterior) {
-        distancias.set(
-          vecino.nodo,
-          nuevaDistancia
-        );
-
-        anteriores.set(
-          vecino.nodo,
-          nodoActual
-        );
-
-        aristasAnteriores.set(
-          vecino.nodo,
-          vecino.arista
-        );
-
-        cola.insertar(
-          vecino.nodo,
-          nuevaDistancia
-        );
-      }
-    }
-  }
-
-  const distanciaDestino =
-    distancias.get(nodoDestino);
-
-  if (!Number.isFinite(distanciaDestino)) {
-    return null;
-  }
-
-  const nodosRuta = [];
-  const aristasRuta = [];
-
-  let actual = nodoDestino;
-
-  while (actual !== nodoOrigen) {
-    nodosRuta.unshift(actual);
-
-    const arista =
-      aristasAnteriores.get(actual);
-
-    if (!arista) {
-      return null;
-    }
-
-    aristasRuta.unshift(arista);
-
-    actual = anteriores.get(actual);
-
-    if (!actual) {
-      return null;
-    }
-  }
-
-  nodosRuta.unshift(nodoOrigen);
-
-  return {
-    nodosRuta,
-    aristasRuta,
-    costoTotal: distanciaDestino,
-  };
+  const margenRedondeo = 0.005 * Math.max(0, cantidadNodos - 1);
+  return pesoDistancia * Math.max(0, distanciaDirecta - margenRedondeo);
 };
 
 /*
@@ -558,13 +430,7 @@ const calcularResumenRuta = ({
   const tiempoEstimadoMinutos =
     Number((tiempoEstimadoSegundos / 60).toFixed(1));
 
-  let nivelRiesgo = "Bajo";
-
-  if (puntajeRiesgo > 66) {
-    nivelRiesgo = "Alto";
-  } else if (puntajeRiesgo > 33) {
-    nivelRiesgo = "Medio";
-  }
+  const nivelRiesgo = clasificarRiesgo(puntajeRiesgo);
 
   return {
     distancia_metros: Number(
@@ -606,6 +472,87 @@ const construirGeometriaRuta = (
     ]);
 };
 
+const crearRespuestaRuta = ({
+  grafo,
+  origen,
+  destino,
+  origenCercano,
+  destinoCercano,
+  resultadoBusqueda,
+  perfil,
+  perfilRuta,
+}) => {
+  if (!resultadoBusqueda) {
+    return {
+      encontrada: false,
+      mensaje: "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.",
+      origen,
+      destino,
+    };
+  }
+
+  const inicioResumen = diagnosticoRutasActivo ? performance.now() : 0;
+  const nodosMap = new Map(grafo.nodos.map((nodo) => [nodo.id, nodo]));
+  const resumen = calcularResumenRuta({
+    aristasRuta: resultadoBusqueda.aristasRuta,
+    costoTotal: resultadoBusqueda.costoTotal,
+  });
+  const tiempoResumenMs = diagnosticoRutasActivo ? performance.now() - inicioResumen : 0;
+  const inicioGeometria = diagnosticoRutasActivo ? performance.now() : 0;
+  resumen.geometria = construirGeometriaRuta(nodosMap, resultadoBusqueda.nodosRuta);
+  const tiempoGeometriaMs = diagnosticoRutasActivo ? performance.now() - inicioGeometria : 0;
+  const inicioSegmentos = diagnosticoRutasActivo ? performance.now() : 0;
+  let costoAcumulado = 0;
+  const segmentos = resultadoBusqueda.aristasRuta.map((arista) => {
+    const costoSegmento = calcularCostoArista(arista, perfil);
+    costoAcumulado += costoSegmento;
+    return {
+      id_osm: arista.id_osm,
+      nodo_origen: arista.nodo_origen,
+      nodo_destino: arista.nodo_destino,
+      distancia_metros: arista.distancia_metros,
+      puntaje_riesgo: arista.puntaje_riesgo,
+      nivel_riesgo: arista.nivel_riesgo,
+      costo_riesgo: arista.costo_riesgo,
+      costo_distancia: arista.costo_distancia,
+      costo_arista: costoSegmento,
+      costo_arista_operativo: costoSegmento,
+      costo_acumulado_ruta: costoAcumulado,
+      zonas_intersectadas: arista.zonas_intersectadas,
+      nombre: arista.nombre,
+      tipo: arista.tipo,
+      categoria_peatonal: arista.categoria_peatonal,
+    };
+  });
+  const tiempoSegmentosMs = diagnosticoRutasActivo ? performance.now() - inicioSegmentos : 0;
+
+  const respuesta = {
+    encontrada: true,
+    origen: {
+      ...origen,
+      nodo_mas_cercano: origenCercano.nodo.id,
+      distancia_al_nodo_metros: origenCercano.distancia_metros,
+    },
+    destino: {
+      ...destino,
+      nodo_mas_cercano: destinoCercano.nodo.id,
+      distancia_al_nodo_metros: destinoCercano.distancia_metros,
+    },
+    ...resumen,
+    ...(perfilRuta ? { perfil_ruta: perfilRuta, nombre_perfil_ruta: perfil.nombre } : {}),
+    nodos_ruta: resultadoBusqueda.nodosRuta,
+    segmentos,
+  };
+  if (diagnosticoRutasActivo) {
+    respuesta.diagnostico_tiempos_construccion_ms = {
+      resumen: tiempoResumenMs,
+      geometria: tiempoGeometriaMs,
+      segmentos: tiempoSegmentosMs,
+    };
+  }
+  return respuesta;
+};
+
 /*
  * Calcula una ruta para un perfil específico.
  *
@@ -619,6 +566,7 @@ const calcularRutaSegura = async ({
   rangoHorario,
   perfilRuta = null,
   grafoPrecalculado = null,
+  contextoPrecalculado = null,
 }) => {
   const perfil = perfilRuta
     ? PERFILES_RUTA[perfilRuta]
@@ -658,8 +606,9 @@ const calcularRutaSegura = async ({
     );
   }
 
+  const contexto = contextoPrecalculado;
   const grafo = validarGrafoPeatonal(
-    grafoPrecalculado ||
+    contexto?.grafo || grafoPrecalculado ||
       await obtenerGrafoRuta({
         comuna,
 
@@ -677,14 +626,14 @@ const calcularRutaSegura = async ({
       })
   );
 
-  const origenCercano =
+  const origenCercano = contexto?.origenCercano ||
     obtenerNodoMasCercanoEnGrafo(
       grafo.nodos,
       latOrigen,
       lonOrigen
     );
 
-  const destinoCercano =
+  const destinoCercano = contexto?.destinoCercano ||
     obtenerNodoMasCercanoEnGrafo(
       grafo.nodos,
       latDestino,
@@ -699,9 +648,13 @@ const calcularRutaSegura = async ({
     `RUTA - Nodo destino: ${destinoCercano.nodo.id} (${destinoCercano.distancia_metros} m)`
   );
 
-  const resultadoDijkstra = dijkstra({
+  // Carga el MinHeap de forma diferida para evitar un ciclo de dependencias:
+  // su servicio reutiliza la heurística y el costo exportados por este módulo.
+  const { aStarMinHeap } = require("./busqueda-a-star-min-heap.service");
+  const resultadoBusqueda = aStarMinHeap({
     nodos: grafo.nodos,
     aristas: grafo.aristas,
+    adyacenciaPreparada: contexto?.adyacencia,
 
     nodoOrigen: origenCercano.nodo.id,
     nodoDestino: destinoCercano.nodo.id,
@@ -709,128 +662,36 @@ const calcularRutaSegura = async ({
     perfil,
   });
 
-  if (!resultadoDijkstra) {
-    return {
-      encontrada: false,
-
-      mensaje:
-        "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.",
-
-      origen: {
-        latitud: latOrigen,
-        longitud: lonOrigen,
-      },
-
-      destino: {
-        latitud: latDestino,
-        longitud: lonDestino,
-      },
-    };
-  }
-
-  const nodosMap = new Map(
-    grafo.nodos.map((nodo) => [nodo.id, nodo])
-  );
-
-  const resumen = calcularResumenRuta({
-    aristasRuta: resultadoDijkstra.aristasRuta,
-    costoTotal: resultadoDijkstra.costoTotal,
+  const resultado = crearRespuestaRuta({
+    grafo,
+    origen: { latitud: latOrigen, longitud: lonOrigen },
+    destino: { latitud: latDestino, longitud: lonDestino },
+    origenCercano,
+    destinoCercano,
+    resultadoBusqueda,
+    perfil,
+    perfilRuta,
   });
 
-  resumen.geometria = construirGeometriaRuta(
-    nodosMap,
-    resultadoDijkstra.nodosRuta
+  if (!resultadoBusqueda) return resultado;
+
+  console.log(
+    `RUTA - Encontrada: ${resultado.cantidad_segmentos} segmentos`
   );
 
   console.log(
-    `RUTA - Encontrada: ${resultadoDijkstra.aristasRuta.length} segmentos`
+    `RUTA - Distancia: ${resultado.distancia_metros} m`
   );
 
   console.log(
-    `RUTA - Distancia: ${resumen.distancia_metros} m`
+    `RUTA - Costo: ${resultado.costo_navegacion}`
   );
 
   console.log(
-    `RUTA - Costo: ${resumen.costo_navegacion}`
+    `RUTA - Riesgo: ${resultado.puntaje_riesgo} (${resultado.nivel_riesgo})`
   );
 
-  console.log(
-    `RUTA - Riesgo: ${resumen.puntaje_riesgo} (${resumen.nivel_riesgo})`
-  );
-
-  return {
-    encontrada: true,
-
-    origen: {
-      latitud: latOrigen,
-      longitud: lonOrigen,
-
-      nodo_mas_cercano: origenCercano.nodo.id,
-
-      distancia_al_nodo_metros:
-        origenCercano.distancia_metros,
-    },
-
-    destino: {
-      latitud: latDestino,
-      longitud: lonDestino,
-
-      nodo_mas_cercano: destinoCercano.nodo.id,
-
-      distancia_al_nodo_metros:
-        destinoCercano.distancia_metros,
-    },
-
-    ...resumen,
-
-    ...(perfilRuta
-      ? {
-          perfil_ruta: perfilRuta,
-          nombre_perfil_ruta: perfil.nombre,
-        }
-      : {}),
-
-    nodos_ruta: resultadoDijkstra.nodosRuta,
-
-    segmentos: (() => {
-      let costoAcumulado = 0;
-      return resultadoDijkstra.aristasRuta.map(
-        (arista) => {
-          const costoSegmento = calcularCostoArista(arista, perfil);
-          costoAcumulado += costoSegmento;
-          return {
-            id_osm: arista.id_osm,
-
-            nodo_origen: arista.nodo_origen,
-            nodo_destino: arista.nodo_destino,
-
-            distancia_metros: arista.distancia_metros,
-
-            puntaje_riesgo: arista.puntaje_riesgo,
-            nivel_riesgo: arista.nivel_riesgo,
-
-            costo_riesgo: arista.costo_riesgo,
-            costo_distancia: arista.costo_distancia,
-
-            // Publicamos la misma precisión usada por Dijkstra. Redondear cada
-            // segmento por separado haría que su suma difiriera del costo total.
-            costo_arista: costoSegmento,
-            costo_arista_operativo: costoSegmento,
-            costo_acumulado_ruta: costoAcumulado,
-
-            zonas_intersectadas:
-              arista.zonas_intersectadas,
-
-            nombre: arista.nombre,
-            tipo: arista.tipo,
-
-            categoria_peatonal:
-              arista.categoria_peatonal,
-          };
-        }
-      );
-    })(),
-  };
+  return resultado;
 };
 
 /*
@@ -878,9 +739,8 @@ const normalizarNombreVia = (nombre) => {
 /*
  * Agrupa la distancia recorrida según la calle.
  *
- * Prioridad:
- * 1. Nombre normalizado de la calle.
- * 2. Identificador OSM, cuando el segmento no tiene nombre.
+ * Prioridad: par físico de nodos (independiente de la dirección),
+ * y luego nombre normalizado o identificador OSM como respaldo.
  */
 const obtenerHuellaCorredores = (ruta) => {
   const segmentos = Array.isArray(ruta.segmentos)
@@ -890,8 +750,23 @@ const obtenerHuellaCorredores = (ruta) => {
   const distanciasPorCorredor = new Map();
 
   let distanciaSegmentos = 0;
+  let distanciaIdentificable = 0;
+  let cantidadSegmentosConNombre = 0;
+  let cantidadSegmentosConIdOsm = 0;
+  let cantidadSegmentosConAmbos = 0;
+  let cantidadSegmentosSinIdentificador = 0;
+  let cantidadSegmentosConCorredor = 0;
 
   for (const segmento of segmentos) {
+    const nombreVia = normalizarNombreVia(segmento.nombre);
+    const tieneNombre = Boolean(nombreVia);
+    const tieneIdOsm = segmento.id_osm !== null && segmento.id_osm !== undefined;
+
+    if (tieneNombre) cantidadSegmentosConNombre += 1;
+    if (tieneIdOsm) cantidadSegmentosConIdOsm += 1;
+    if (tieneNombre && tieneIdOsm) cantidadSegmentosConAmbos += 1;
+    if (!tieneNombre && !tieneIdOsm) cantidadSegmentosSinIdentificador += 1;
+
     const distancia = Number(segmento.distancia_metros);
 
     if (!Number.isFinite(distancia) || distancia <= 0) {
@@ -900,13 +775,15 @@ const obtenerHuellaCorredores = (ruta) => {
 
     distanciaSegmentos += distancia;
 
-    const nombreVia = normalizarNombreVia(segmento.nombre);
-
+    const nodoOrigen = segmento.nodo_origen;
+    const nodoDestino = segmento.nodo_destino;
     let claveCorredor = null;
-
-    if (nombreVia) {
+    if (nodoOrigen !== undefined && nodoOrigen !== null && nodoDestino !== undefined && nodoDestino !== null) {
+      const [primero, segundo] = [String(nodoOrigen), String(nodoDestino)].sort();
+      claveCorredor = `arista:${primero}<->${segundo}${tieneIdOsm ? `|osm:${segmento.id_osm}` : ""}`;
+    } else if (tieneNombre) {
       claveCorredor = `via:${nombreVia}`;
-    } else if (segmento.id_osm != null) {
+    } else if (tieneIdOsm) {
       claveCorredor = `osm:${segmento.id_osm}`;
     }
 
@@ -915,6 +792,9 @@ const obtenerHuellaCorredores = (ruta) => {
     if (!claveCorredor) {
       continue;
     }
+
+    distanciaIdentificable += distancia;
+    cantidadSegmentosConCorredor += 1;
 
     const distanciaAnterior =
       distanciasPorCorredor.get(claveCorredor) || 0;
@@ -933,9 +813,40 @@ const obtenerHuellaCorredores = (ruta) => {
       ? distanciaInformada
       : distanciaSegmentos;
 
+  const toleranciaCobertura = 1e-9 * Math.max(1, distanciaTotal);
+  const cobertura = distanciaTotal > 0
+    ? Math.min(1, distanciaIdentificable / distanciaTotal)
+    : 0;
+
   return {
     distanciasPorCorredor,
     distanciaTotal,
+    distanciaIdentificable,
+    cobertura,
+    coberturaSuficiente: distanciaTotal > 0 &&
+      distanciaIdentificable >= distanciaTotal - toleranciaCobertura,
+    cantidadSegmentos: segmentos.length,
+    cantidadSegmentosConNombre,
+    cantidadSegmentosConIdOsm,
+    cantidadSegmentosConAmbos,
+    cantidadSegmentosSinIdentificador,
+    cantidadSegmentosConCorredor,
+  };
+};
+
+const obtenerDiagnosticoCorredores = (ruta) => {
+  const huella = obtenerHuellaCorredores(ruta);
+  return {
+    distancia_total_metros: huella.distanciaTotal,
+    distancia_identificable_metros: huella.distanciaIdentificable,
+    cobertura_identificable: huella.cobertura,
+    cobertura_suficiente: huella.coberturaSuficiente,
+    cantidad_segmentos: huella.cantidadSegmentos,
+    cantidad_segmentos_con_nombre: huella.cantidadSegmentosConNombre,
+    cantidad_segmentos_con_id_osm: huella.cantidadSegmentosConIdOsm,
+    cantidad_segmentos_con_ambos: huella.cantidadSegmentosConAmbos,
+    cantidad_segmentos_sin_identificador: huella.cantidadSegmentosSinIdentificador,
+    cantidad_segmentos_con_corredor: huella.cantidadSegmentosConCorredor,
   };
 };
 
@@ -947,6 +858,10 @@ const obtenerHuellaCorredores = (ruta) => {
  * 1 = comparten toda la distancia identificada.
  */
 const calcularSimilitudCorredor = (rutaA, rutaB) => {
+  return compararCorredores(rutaA, rutaB).similitud;
+};
+
+const compararCorredores = (rutaA, rutaB) => {
   const huellaA = obtenerHuellaCorredores(rutaA);
   const huellaB = obtenerHuellaCorredores(rutaB);
 
@@ -956,7 +871,10 @@ const calcularSimilitudCorredor = (rutaA, rutaB) => {
     huellaA.distanciasPorCorredor.size === 0 ||
     huellaB.distanciasPorCorredor.size === 0
   ) {
-    return 0;
+    return {
+      distancia_compartida_metros: 0,
+      similitud: 0,
+    };
   }
 
   let distanciaCompartida = 0;
@@ -972,14 +890,17 @@ const calcularSimilitudCorredor = (rutaA, rutaB) => {
     );
   }
 
-  return Math.min(
-    1,
-    distanciaCompartida /
-      Math.max(
-        huellaA.distanciaTotal,
-        huellaB.distanciaTotal
-      )
-  );
+  return {
+    distancia_compartida_metros: distanciaCompartida,
+    similitud: Math.min(
+      1,
+      distanciaCompartida /
+        Math.max(
+          huellaA.distanciaTotal,
+          huellaB.distanciaTotal
+        )
+    ),
+  };
 };
 
 /*
@@ -1033,128 +954,625 @@ const sonRutasEquivalentes = (rutaA, rutaB) => {
   return true;
 };
 
+/* Aplica la misma deduplicación utilizada por las alternativas habituales. */
+const filtrarRutasAlternativas = (rutasCandidatas) => {
+  const rutasUnicas = [];
+  const recorridosVistos = new Set();
+  const evaluacion = [];
+
+  for (const ruta of rutasCandidatas) {
+    const identificadorRecorrido = Array.isArray(ruta.nodos_ruta)
+      ? ruta.nodos_ruta.join("->")
+      : "";
+    const rutaRepetidaPorSecuencia = recorridosVistos.has(identificadorRecorrido);
+    const equivalente = rutasUnicas.find((rutaExistente) =>
+      sonRutasEquivalentes(rutaExistente, ruta)
+    );
+    const conservada = !rutaRepetidaPorSecuencia && !equivalente;
+    const referencia = equivalente || (rutaRepetidaPorSecuencia
+      ? rutasUnicas.find((rutaExistente) =>
+          Array.isArray(rutaExistente.nodos_ruta) &&
+          rutaExistente.nodos_ruta.join("->") === identificadorRecorrido
+        )
+      : null);
+
+    evaluacion.push({
+      ruta,
+      conservada,
+      motivo_descarte: conservada
+        ? null
+        : rutaRepetidaPorSecuencia || (
+            referencia &&
+            Array.isArray(referencia.nodos_ruta) &&
+            referencia.nodos_ruta.join("->") === identificadorRecorrido
+          )
+          ? "secuencia_nodos"
+          : "similitud_corredores",
+      perfil_redundante_con: conservada ? null : referencia?.perfil_ruta ?? null,
+    });
+
+    if (conservada) {
+      recorridosVistos.add(identificadorRecorrido);
+      rutasUnicas.push(ruta);
+    }
+  }
+
+  return {
+    rutasUnicas,
+    evaluacion,
+  };
+};
+
+const firmaRuta = (nodosRuta) => nodosRuta.join("->");
+
+const rutaDominadaPorAlguna = (ruta, seleccionadas) => {
+  const distancia = Number(ruta.distancia_metros);
+  const riesgo = Number(ruta.puntaje_riesgo);
+  return seleccionadas.some((otra) => {
+    const otraDistancia = Number(otra.distancia_metros);
+    const otroRiesgo = Number(otra.puntaje_riesgo);
+    const noPeor = otraDistancia <= distancia && otroRiesgo <= riesgo;
+    const estrictamenteMejor = otraDistancia < distancia || otroRiesgo < riesgo;
+    return noPeor && estrictamenteMejor;
+  });
+};
+
+const generarCaminosYen = ({
+  contexto,
+  resultadoInicial,
+  perfil,
+  maxCandidatos = YEN_MAX_CANDIDATOS,
+  maxDesviaciones = YEN_MAX_BUSQUEDAS_DESVIACION,
+  signal,
+}) => {
+  const {
+    aStarMinHeap,
+    claveAristaFisica,
+  } = require("./busqueda-a-star-min-heap.service");
+  if (!resultadoInicial || maxCandidatos <= 1) {
+    return {
+      caminos: resultadoInicial ? [resultadoInicial] : [],
+      caminosCandidatosUnicos: [],
+      metricas: {
+        candidatosEvaluados: resultadoInicial ? 1 : 0,
+        candidatosUnicos: resultadoInicial ? 1 : 0,
+        candidatosDuplicados: 0,
+        busquedasDesviacion: 0,
+        ...(diagnosticoRutasActivo ? { detalleDesviaciones: [] } : {}),
+      },
+    };
+  }
+
+  const caminos = [resultadoInicial];
+  const candidatos = [];
+  const candidatosUnicos = new Map();
+  const firmasAceptadas = new Set([firmaRuta(resultadoInicial.nodosRuta)]);
+  const firmasCandidatas = new Set();
+  let busquedasDesviacion = 0;
+  let candidatosGenerados = 0;
+  let candidatosDuplicados = 0;
+  const detalleDesviaciones = [];
+  let limiteDesviacionesAlcanzado = false;
+  let limiteCandidatosAlcanzado = false;
+
+  for (let indiceCamino = 1; indiceCamino < maxCandidatos; indiceCamino += 1) {
+    const anterior = caminos[indiceCamino - 1];
+    for (let indiceDesvio = 0; indiceDesvio < anterior.nodosRuta.length - 1; indiceDesvio += 1) {
+      if (signal?.aborted) {
+        const error = new Error("La solicitud de rutas fue cancelada.");
+        error.code = "BUSQUEDA_CANCELADA";
+        throw error;
+      }
+      if (busquedasDesviacion >= maxDesviaciones) {
+        limiteDesviacionesAlcanzado = true;
+        break;
+      }
+      busquedasDesviacion += 1;
+
+      const nodosRaiz = anterior.nodosRuta.slice(0, indiceDesvio + 1);
+      const aristasRaiz = anterior.aristasRuta.slice(0, indiceDesvio);
+      const nodoDesvio = nodosRaiz[nodosRaiz.length - 1];
+      const nodosExcluidos = new Set(nodosRaiz.slice(0, -1));
+      const aristasExcluidas = new Set();
+
+      for (const caminoAceptado of caminos) {
+        const compartePrefijo = nodosRaiz.every(
+          (id, indice) => caminoAceptado.nodosRuta[indice] === id,
+        );
+        if (compartePrefijo && caminoAceptado.aristasRuta[indiceDesvio]) {
+          const arista = caminoAceptado.aristasRuta[indiceDesvio];
+          aristasExcluidas.add(arista);
+          aristasExcluidas.add(claveAristaFisica(arista));
+        }
+      }
+
+      const spur = aStarMinHeap({
+        ...contexto,
+        nodoOrigen: nodoDesvio,
+        nodoDestino: contexto.nodoDestino,
+        perfil,
+        nodosExcluidos,
+        aristasExcluidas,
+        estaCancelada: () => Boolean(signal?.aborted),
+      });
+      if (!spur) {
+        if (diagnosticoRutasActivo) detalleDesviaciones.push({
+          busqueda: busquedasDesviacion,
+          indice_desvio: indiceDesvio,
+          nodo_desvio: nodoDesvio,
+          estado: "sin_conexion",
+          motivo: "falta_de_conexion",
+        });
+        continue;
+      }
+
+      const nodosRuta = [...nodosRaiz.slice(0, -1), ...spur.nodosRuta];
+      const aristasRuta = [...aristasRaiz, ...spur.aristasRuta];
+      const firma = firmaRuta(nodosRuta);
+      if (diagnosticoRutasActivo && new Set(nodosRuta).size !== nodosRuta.length) {
+        if (diagnosticoRutasActivo) detalleDesviaciones.push({
+          busqueda: busquedasDesviacion,
+          indice_desvio: indiceDesvio,
+          nodo_desvio: nodoDesvio,
+          estado: "camino_invalido",
+          motivo: "ciclo_detectado",
+          cantidad_nodos_ruta: nodosRuta.length,
+        });
+        continue;
+      }
+      candidatosGenerados += 1;
+      if (firmasAceptadas.has(firma) || firmasCandidatas.has(firma)) {
+        candidatosDuplicados += 1;
+        if (diagnosticoRutasActivo) detalleDesviaciones.push({
+          busqueda: busquedasDesviacion,
+          indice_desvio: indiceDesvio,
+          nodo_desvio: nodoDesvio,
+          estado: "duplicado",
+          motivo: "secuencia_ya_generada",
+          cantidad_nodos_ruta: nodosRuta.length,
+        });
+        continue;
+      }
+
+      const costoRaiz = aristasRaiz.reduce(
+        (suma, arista) => suma + calcularCostoArista(arista, perfil),
+        0,
+      );
+      const candidato = {
+        nodosRuta,
+        aristasRuta,
+        costoTotal: costoRaiz + spur.costoTotal,
+      };
+      if (diagnosticoRutasActivo) candidatosUnicos.set(firma, candidato);
+      candidatos.push(candidato);
+      candidatos.sort((a, b) =>
+        a.costoTotal - b.costoTotal || firmaRuta(a.nodosRuta).localeCompare(firmaRuta(b.nodosRuta))
+      );
+      firmasCandidatas.add(firma);
+      if (diagnosticoRutasActivo) detalleDesviaciones.push({
+        busqueda: busquedasDesviacion,
+        indice_desvio: indiceDesvio,
+        nodo_desvio: nodoDesvio,
+        estado: "candidato_unico_generado",
+        costo_perfil: candidato.costoTotal,
+        cantidad_nodos_ruta: nodosRuta.length,
+      });
+      if (candidatos.length >= maxCandidatos - 1) {
+        limiteCandidatosAlcanzado = true;
+        break;
+      }
+    }
+
+    if (!candidatos.length) break;
+    const siguiente = candidatos.shift();
+    const firmaSiguiente = firmaRuta(siguiente.nodosRuta);
+    firmasCandidatas.delete(firmaSiguiente);
+    firmasAceptadas.add(firmaSiguiente);
+    caminos.push(siguiente);
+  }
+
+  return {
+    caminos,
+    caminosCandidatosUnicos: Array.from(candidatosUnicos.values()).sort((a, b) =>
+      a.costoTotal - b.costoTotal || firmaRuta(a.nodosRuta).localeCompare(firmaRuta(b.nodosRuta)),
+    ),
+    metricas: {
+      candidatosEvaluados: caminos.length,
+      candidatosGenerados,
+      candidatosUnicos: diagnosticoRutasActivo
+        ? candidatosUnicos.size
+        : candidatosGenerados - candidatosDuplicados,
+      candidatosDuplicados,
+      busquedasDesviacion,
+      limiteCandidatos: maxCandidatos,
+      limiteDesviaciones: maxDesviaciones,
+      limiteCandidatosAlcanzado,
+      limiteDesviacionesAlcanzado,
+      ...(diagnosticoRutasActivo ? { detalleDesviaciones } : {}),
+    },
+  };
+};
+
 /*
- * Genera las alternativas de navegación:
- * 1. Menor riesgo.
- * 2. Equilibrada.
- * 3. Más rápida.
- *
- * El grafo se obtiene una sola vez y se reutiliza
- * para ejecutar Dijkstra con cada perfil.
- *
- * Los recorridos duplicados se eliminan.
- * Si no hay tres recorridos diferentes, se devuelven
- * únicamente las alternativas disponibles.
+ * Prepara las tres rutas en una sola solicitud. El grafo, los riesgos, los
+ * extremos asociados y la adyacencia se construyen una vez; tres workers
+ * reutilizables ejecutan A* + MinHeap sobre copias estructuradas del mismo
+ * contexto. El principal se encola primero y conserva siempre la prioridad.
  */
 const calcularRutasAlternativas = async ({
   comuna,
   origen,
   destino,
   rangoHorario,
+  perfilRuta = "menor_riesgo",
+  signal,
 }) => {
-  const {
-    latOrigen,
-    lonOrigen,
-    latDestino,
-    lonDestino,
-  } = normalizarCoordenadasRuta({
-    origen,
-    destino,
-  });
-
-  const origenNormalizado = {
-    latitud: latOrigen,
-    longitud: lonOrigen,
-  };
-
-  const destinoNormalizado = {
-    latitud: latDestino,
-    longitud: lonDestino,
-  };
-
+  const perfilPrincipal = perfilRuta || "menor_riesgo";
+  if (!PERFILES_RUTA[perfilPrincipal]) {
+    throw new Error(`Perfil de ruta no válido: ${perfilPrincipal}`);
+  }
+  const inicioTotal = performance.now();
+  const inicioPreparacionGrafo = performance.now();
+  const coordenadas = normalizarCoordenadasRuta({ origen, destino });
+  const origenNormalizado = { latitud: coordenadas.latOrigen, longitud: coordenadas.lonOrigen };
+  const destinoNormalizado = { latitud: coordenadas.latDestino, longitud: coordenadas.lonDestino };
   const grafo = await obtenerGrafoRuta({
     comuna,
     origen: origenNormalizado,
     destino: destinoNormalizado,
     rangoHorario,
   });
+  const tiempoPreparacionGrafoRiesgoMs = performance.now() - inicioPreparacionGrafo;
 
-  const rutasUnicas = [];
-  const recorridosVistos = new Set();
-
-  for (const perfilRuta of Object.keys(PERFILES_RUTA)) {
-    const resultado = await calcularRutaSegura({
-      comuna,
-
-      origen: origenNormalizado,
-      destino: destinoNormalizado,
-
-      rangoHorario,
-      perfilRuta,
-
-      grafoPrecalculado: grafo,
-    });
-
-    if (
-      !resultado.encontrada ||
-      !Array.isArray(resultado.nodos_ruta)
-    ) {
-      continue;
-    }
-
-    const identificadorRecorrido =
-      resultado.nodos_ruta.join("->");
-
-    const rutaRedundante = rutasUnicas.some(
-      (rutaExistente) =>
-        sonRutasEquivalentes(
-          rutaExistente,
-          resultado
-        )
-    );
-
-    if (
-      recorridosVistos.has(identificadorRecorrido) ||
-      rutaRedundante
-    ) {
-      console.log(
-        `RUTA - Alternativa redundante descartada: ${perfilRuta}`
-      );
-
-      continue;
-    }
-
-    recorridosVistos.add(
-      identificadorRecorrido
-    );
-
-    rutasUnicas.push(resultado);
-  }
-
-  const cantidadPerfiles =
-    Object.keys(PERFILES_RUTA).length;
-
-  let mensaje = null;
-
-  if (rutasUnicas.length === 0) {
-    mensaje =
-      "No fue posible encontrar una ruta peatonal entre los puntos seleccionados.";
-  } else if (rutasUnicas.length < cantidadPerfiles) {
-    mensaje =
-      `Solo fue posible generar ${rutasUnicas.length} rutas peatonales diferentes de ${cantidadPerfiles} posibles.`;
-  }
-
-  console.log(
-    `RUTA - Alternativas diferentes: ${rutasUnicas.length}/${cantidadPerfiles}`
+  const inicioSeleccionNodos = performance.now();
+  const origenCercano = obtenerNodoMasCercanoEnGrafo(
+    grafo.nodos,
+    coordenadas.latOrigen,
+    coordenadas.lonOrigen,
   );
+  const destinoCercano = obtenerNodoMasCercanoEnGrafo(
+    grafo.nodos,
+    coordenadas.latDestino,
+    coordenadas.lonDestino,
+  );
+  const tiempoSeleccionNodosMs = performance.now() - inicioSeleccionNodos;
+
+  const inicioAdyacencia = performance.now();
+  const adyacencia = construirAdyacencia(grafo.aristas);
+  const tiempoAdyacenciaMs = performance.now() - inicioAdyacencia;
+  const contexto = {
+    nodos: grafo.nodos,
+    aristas: grafo.aristas,
+    adyacenciaPreparada: adyacencia,
+    nodoOrigen: origenCercano.nodo.id,
+    nodoDestino: destinoCercano.nodo.id,
+  };
+
+  const ordenPerfiles = [
+    perfilPrincipal,
+    ...Object.keys(PERFILES_RUTA).filter((perfil) => perfil !== perfilPrincipal),
+  ];
+  const tareas = ordenPerfiles.map((perfil, indice) => ({
+    perfil: PERFILES_RUTA[perfil],
+    perfilRuta: perfil,
+    contexto,
+    prioridad: indice === 0 ? 0 : 1,
+  }));
+  const inicioBusquedas = performance.now();
+  const lote = await ejecutarLoteBusqueda(tareas, { signal });
+  const tiempoLoteBusquedasMs = performance.now() - inicioBusquedas;
+  const resultadosBase = Object.fromEntries(
+    tareas.map((tarea, indice) => [tarea.perfilRuta, lote.resultados[indice]]),
+  );
+  const nodosDestinoRuta = {
+    origen: origenNormalizado,
+    destino: destinoNormalizado,
+    origenCercano,
+    destinoCercano,
+    grafo,
+  };
+
+  const rutasPorPerfil = {};
+  const estadoPorPerfil = {};
+  let tiempoGeneracionYenMs = 0;
+  let activacionesYen = 0;
+  let candidatosYenEvaluados = 0;
+  let busquedasYen = 0;
+  let tiempoPerfilPrincipalMs = 0;
+  let tiempoPerfilesSecundariosMs = 0;
+  let tiempoParedPerfilesSecundariosMs = 0;
+  let tiempoConstruccionRutasMs = 0;
+  const tiemposConstruccionPorEtapa = { resumen: 0, geometria: 0, segmentos: 0 };
+  let tiempoEvaluacionAlternativasMs = 0;
+  const diagnosticosYenPorPerfil = {};
+  const seleccionadas = [];
+
+  for (const perfil of ordenPerfiles) {
+    const base = resultadosBase[perfil];
+    if (perfil === perfilPrincipal) tiempoPerfilPrincipalMs = base.tiempoBusquedaMs;
+    else {
+      tiempoPerfilesSecundariosMs += base.tiempoBusquedaMs;
+      tiempoParedPerfilesSecundariosMs = Math.max(
+        tiempoParedPerfilesSecundariosMs,
+        base.tiempoBusquedaMs,
+      );
+    }
+
+    if (!base.resultado) {
+      estadoPorPerfil[perfil] = {
+        estado: "sin_ruta",
+        metodo: "astar_min_heap",
+        tiempo_busqueda_ms: base.tiempoBusquedaMs,
+        candidatos_yen_evaluados: 0,
+      };
+      continue;
+    }
+
+    const inicioConstruccionBase = performance.now();
+    const rutaBase = crearRespuestaRuta({
+      ...nodosDestinoRuta,
+      resultadoBusqueda: base.resultado,
+      perfil: PERFILES_RUTA[perfil],
+      perfilRuta: perfil,
+    });
+    tiempoConstruccionRutasMs += performance.now() - inicioConstruccionBase;
+    for (const etapa of Object.keys(tiemposConstruccionPorEtapa)) {
+      tiemposConstruccionPorEtapa[etapa] += rutaBase.diagnostico_tiempos_construccion_ms?.[etapa] || 0;
+    }
+    const inicioEvaluacionBase = performance.now();
+    const redundante = seleccionadas.some((ruta) => sonRutasEquivalentes(ruta, rutaBase));
+    const dominada = rutaDominadaPorAlguna(rutaBase, seleccionadas);
+    tiempoEvaluacionAlternativasMs += performance.now() - inicioEvaluacionBase;
+    let rutaSeleccionada = null;
+    let metodo = "astar_min_heap";
+    let metricasYen = { candidatosEvaluados: 1, busquedasDesviacion: 0 };
+
+    if (perfil === perfilPrincipal || (!redundante && !dominada)) {
+      rutaSeleccionada = rutaBase;
+    } else {
+      activacionesYen += 1;
+      const inicioYen = performance.now();
+      const resultadoYen = generarCaminosYen({
+        contexto,
+        resultadoInicial: base.resultado,
+        perfil: PERFILES_RUTA[perfil],
+        signal,
+      });
+      tiempoGeneracionYenMs += performance.now() - inicioYen;
+      metricasYen = resultadoYen.metricas;
+      candidatosYenEvaluados += metricasYen.candidatosEvaluados;
+      busquedasYen += metricasYen.busquedasDesviacion;
+
+      const diagnosticoCandidatos = [];
+      for (const camino of resultadoYen.caminos.slice(1)) {
+        const inicioConstruccionCandidato = performance.now();
+        const respuesta = crearRespuestaRuta({
+          ...nodosDestinoRuta,
+          resultadoBusqueda: camino,
+          perfil: PERFILES_RUTA[perfil],
+          perfilRuta: perfil,
+        });
+        tiempoConstruccionRutasMs += performance.now() - inicioConstruccionCandidato;
+        for (const etapa of Object.keys(tiemposConstruccionPorEtapa)) {
+          tiemposConstruccionPorEtapa[etapa] += respuesta.diagnostico_tiempos_construccion_ms?.[etapa] || 0;
+        }
+        const inicioEvaluacionCandidato = performance.now();
+        const equivalente = seleccionadas.some((ruta) => sonRutasEquivalentes(ruta, respuesta));
+        const dominadaPorOtra = rutaDominadaPorAlguna(respuesta, seleccionadas);
+        tiempoEvaluacionAlternativasMs += performance.now() - inicioEvaluacionCandidato;
+        if (diagnosticoRutasActivo) {
+          const comparaciones = seleccionadas.map((referencia) => {
+            const corredores = compararCorredores(referencia, respuesta);
+            const mismaSecuencia = firmaRuta(referencia.nodos_ruta) === firmaRuta(respuesta.nodos_ruta);
+            const riesgoDiferente = Math.abs(Number(referencia.puntaje_riesgo) - Number(respuesta.puntaje_riesgo));
+            const riesgoRelevante = riesgoDiferente >= DIFERENCIA_RIESGO_RELEVANTE;
+            const costoReferenciaPerfil = (referencia.segmentos || []).reduce(
+              (total, segmento) => total + calcularCostoArista(segmento, PERFILES_RUTA[perfil]),
+              0,
+            );
+            return {
+              perfil_referencia: referencia.perfil_ruta,
+              misma_secuencia: mismaSecuencia,
+              distancia_compartida_metros: corredores.distancia_compartida_metros,
+              similitud_corredor: corredores.similitud,
+              diferencia_distancia_metros: Number(respuesta.distancia_metros) - Number(referencia.distancia_metros),
+              diferencia_riesgo: Number(respuesta.puntaje_riesgo) - Number(referencia.puntaje_riesgo),
+              diferencia_costo_perfil: Number(camino.costoTotal) - costoReferenciaPerfil,
+              diferencia_riesgo_relevante: riesgoRelevante,
+              similitud_excesiva: corredores.similitud >= UMBRAL_SIMILITUD_CORREDOR,
+            };
+          });
+          const mismaSecuencia = comparaciones.some((item) => item.misma_secuencia);
+          const similitudExcesiva = comparaciones.some((item) => item.similitud_excesiva && !item.diferencia_riesgo_relevante);
+          const excepcionRiesgo = comparaciones.some((item) => item.similitud_excesiva && item.diferencia_riesgo_relevante);
+          diagnosticoCandidatos.push({
+            nodos_ruta: respuesta.nodos_ruta,
+            costo_perfil: camino.costoTotal,
+            distancia_metros: respuesta.distancia_metros,
+            puntaje_riesgo: respuesta.puntaje_riesgo,
+            comparaciones,
+            aceptado: !equivalente && !dominadaPorOtra,
+            seleccionado: false,
+            motivo: equivalente
+              ? (mismaSecuencia ? "secuencia_identica" : "similitud_corredor_excesiva")
+              : dominadaPorOtra
+                ? "dominada_en_distancia_y_riesgo"
+                : excepcionRiesgo
+                  ? "aceptada_por_diferencia_relevante_de_riesgo"
+                  : "aceptada_como_alternativa_no_redundante",
+            filtro_costo_no_aplicado: true,
+            costo_no_competitivo_es_criterio_de_descarte: false,
+          });
+        }
+        if (equivalente || dominadaPorOtra) continue;
+        if (!rutaSeleccionada) {
+          rutaSeleccionada = respuesta;
+          metodo = "yen_astar_min_heap";
+          if (diagnosticoRutasActivo) {
+            diagnosticoCandidatos[diagnosticoCandidatos.length - 1].seleccionado = true;
+          } else {
+            break;
+          }
+        } else if (diagnosticoRutasActivo) {
+          diagnosticoCandidatos[diagnosticoCandidatos.length - 1].motivo =
+            "alternativa_aceptable_no_seleccionada_limite_una_por_perfil";
+        }
+      }
+      if (diagnosticoRutasActivo) {
+        const firmasDentroDelLimite = new Set(
+          resultadoYen.caminos.slice(1).map((camino) => firmaRuta(camino.nodosRuta)),
+        );
+        const fueraDelLimite = (resultadoYen.caminosCandidatosUnicos || [])
+          .filter((camino) => !firmasDentroDelLimite.has(firmaRuta(camino.nodosRuta)))
+          .map((camino) => ({
+            nodos_ruta: camino.nodosRuta,
+            costo_perfil: camino.costoTotal,
+            evaluado_por_filtro: false,
+            aceptado: null,
+            seleccionado: false,
+            motivo: "fuera_del_maximo_de_cinco_caminos_yen",
+          }));
+        const comparacionesIniciales = seleccionadas.map((referencia) => {
+          const corredores = compararCorredores(referencia, rutaBase);
+          const costoReferenciaPerfil = (referencia.segmentos || []).reduce(
+            (total, segmento) => total + calcularCostoArista(segmento, PERFILES_RUTA[perfil]),
+            0,
+          );
+          return {
+            perfil_referencia: referencia.perfil_ruta,
+            misma_secuencia: firmaRuta(referencia.nodos_ruta) === firmaRuta(rutaBase.nodos_ruta),
+            distancia_compartida_metros: corredores.distancia_compartida_metros,
+            similitud_corredor: corredores.similitud,
+            diferencia_distancia_metros: Number(rutaBase.distancia_metros) - Number(referencia.distancia_metros),
+            diferencia_riesgo: Number(rutaBase.puntaje_riesgo) - Number(referencia.puntaje_riesgo),
+            diferencia_costo_perfil: Number(base.resultado.costoTotal) - costoReferenciaPerfil,
+          };
+        });
+        diagnosticosYenPorPerfil[perfil] = {
+          ruta_inicial: {
+            nodos_ruta: rutaBase.nodos_ruta,
+            distancia_metros: rutaBase.distancia_metros,
+            puntaje_riesgo: rutaBase.puntaje_riesgo,
+            costo_perfil: base.resultado.costoTotal,
+            redundante: redundante,
+            dominada,
+            comparaciones: comparacionesIniciales,
+          },
+          metricas: metricasYen,
+          candidatos: diagnosticoCandidatos,
+          candidatos_unicos_fuera_del_limite: fueraDelLimite,
+        };
+      }
+    }
+
+    if (rutaSeleccionada) {
+      rutaSeleccionada.es_ruta_principal = perfil === perfilPrincipal;
+      rutaSeleccionada.metodo_generacion = metodo;
+      seleccionadas.push(rutaSeleccionada);
+      estadoPorPerfil[perfil] = {
+        estado: "preparada",
+        metodo,
+        tiempo_busqueda_ms: base.tiempoBusquedaMs,
+        candidatos_yen_evaluados: metricasYen.candidatosEvaluados,
+        ...(diagnosticoRutasActivo ? {
+          candidatos_yen_generados: metricasYen.candidatosGenerados ?? metricasYen.candidatosEvaluados,
+          candidatos_yen_unicos: metricasYen.candidatosUnicos ?? metricasYen.candidatosEvaluados,
+          candidatos_yen_duplicados: metricasYen.candidatosDuplicados ?? 0,
+        } : {}),
+        busquedas_yen: metricasYen.busquedasDesviacion,
+        ruta_inicial_redundante: redundante,
+        ruta_inicial_dominada: dominada,
+      };
+    } else {
+      estadoPorPerfil[perfil] = {
+        estado: "sin_alternativa_aceptable",
+        metodo: activacionesYen ? "yen_astar_min_heap" : "astar_min_heap",
+        tiempo_busqueda_ms: base.tiempoBusquedaMs,
+        candidatos_yen_evaluados: metricasYen.candidatosEvaluados,
+        ...(diagnosticoRutasActivo ? {
+          candidatos_yen_generados: metricasYen.candidatosGenerados ?? metricasYen.candidatosEvaluados,
+          candidatos_yen_unicos: metricasYen.candidatosUnicos ?? metricasYen.candidatosEvaluados,
+          candidatos_yen_duplicados: metricasYen.candidatosDuplicados ?? 0,
+        } : {}),
+        busquedas_yen: metricasYen.busquedasDesviacion,
+        ruta_inicial_redundante: redundante,
+        ruta_inicial_dominada: dominada,
+      };
+    }
+  }
+
+  const inicioDiversidad = performance.now();
+  const diversidad = [];
+  for (let i = 0; i < seleccionadas.length; i += 1) {
+    for (let j = i + 1; j < seleccionadas.length; j += 1) {
+      const a = seleccionadas[i];
+      const b = seleccionadas[j];
+      const comparacion = compararCorredores(a, b);
+      diversidad.push({
+        perfil_a: a.perfil_ruta,
+        perfil_b: b.perfil_ruta,
+        secuencias_iguales: firmaRuta(a.nodos_ruta) === firmaRuta(b.nodos_ruta),
+        distancia_compartida_metros: comparacion.distancia_compartida_metros,
+        similitud_corredor: comparacion.similitud,
+        diferencia_riesgo: Math.abs(a.puntaje_riesgo - b.puntaje_riesgo),
+      });
+    }
+  }
+  const tiempoFiltradoDiversidadMs = performance.now() - inicioDiversidad;
+  const tiempoTotalMs = performance.now() - inicioTotal;
+  const mensaje = seleccionadas.length === 0
+    ? "No fue posible encontrar una ruta peatonal entre los puntos seleccionados."
+    : seleccionadas.length < Object.keys(PERFILES_RUTA).length
+      ? `Se prepararon ${seleccionadas.length} rutas distintas; no se forzaron recorridos redundantes.`
+      : null;
 
   return {
-    encontrada: rutasUnicas.length > 0,
-
-    cantidad_rutas: rutasUnicas.length,
-
-    rutas: rutasUnicas,
-
+    encontrada: seleccionadas.length > 0,
+    cantidad_rutas: seleccionadas.length,
+    perfil_principal: perfilPrincipal,
+    rutas: seleccionadas,
+    estado_generacion_por_perfil: estadoPorPerfil,
+    diversidad,
+    generacion: {
+      estrategia: "astar_min_heap_workers_yen_condicional",
+      max_rutas: Object.keys(PERFILES_RUTA).length,
+      metricas: {
+        tiempo_preparacion_grafo_riesgo_ms: tiempoPreparacionGrafoRiesgoMs,
+        tiempo_seleccion_nodos_ms: tiempoSeleccionNodosMs,
+        tiempo_construccion_adyacencia_ms: tiempoAdyacenciaMs,
+        tiempo_transferencia_contexto_workers_ms: lote.metricas.tiempoTransferenciaContextoMs,
+        tiempo_espera_cola_workers_ms: lote.metricas.tiempoEsperaColaMs,
+        tiempo_lote_busquedas_iniciales_ms: tiempoLoteBusquedasMs,
+        tiempo_busqueda_perfil_principal_ms: tiempoPerfilPrincipalMs,
+        tiempo_busquedas_perfiles_secundarios_ms: tiempoPerfilesSecundariosMs,
+        tiempo_pared_perfiles_secundarios_ms: tiempoParedPerfilesSecundariosMs,
+        tiempo_generacion_yen_ms: tiempoGeneracionYenMs,
+        tiempo_filtrado_diversidad_ms: tiempoFiltradoDiversidadMs + tiempoEvaluacionAlternativasMs,
+        tiempo_conversion_rutas_ms: tiempoConstruccionRutasMs,
+        tiempo_total_respuesta_ms: tiempoTotalMs,
+        ...(diagnosticoRutasActivo ? {
+          tiempo_arranque_workers_ms: lote.metricas.tiempoArranqueWorkersMs,
+          tiempo_round_trip_workers_ms: lote.metricas.tiempoRoundTripWorkersMs,
+          trabajos_workers: lote.metricas.detalleTrabajos,
+          tiempo_evaluacion_candidatos_ms: tiempoEvaluacionAlternativasMs,
+          tiempos_construccion_rutas_por_etapa_ms: tiemposConstruccionPorEtapa,
+          diagnostico_yen_por_perfil: diagnosticosYenPorPerfil,
+        } : {}),
+      },
+      yen: {
+        max_candidatos_por_perfil: YEN_MAX_CANDIDATOS,
+        max_busquedas_desviacion_por_perfil: YEN_MAX_BUSQUEDAS_DESVIACION,
+        activaciones: activacionesYen,
+        candidatos_evaluados: candidatosYenEvaluados,
+        busquedas_desviacion: busquedasYen,
+      },
+    },
+    grafo: {
+      cantidad_nodos: grafo.nodos.length,
+      cantidad_aristas: grafo.aristas.length,
+      fuente: "supabase",
+      carga_unica: true,
+    },
     ...(mensaje ? { mensaje } : {}),
   };
 };
@@ -1163,4 +1581,17 @@ module.exports = {
   calcularRutaSegura,
   calcularRutasAlternativas,
   construirBboxRuta,
+  distanciaHaversine,
+  construirAdyacencia,
+  calcularCostoArista,
+  heuristicaAStar,
+  obtenerGrafoRuta,
+  obtenerNodoMasCercanoEnGrafo,
+  calcularResumenRuta,
+  construirGeometriaRuta,
+  filtrarRutasAlternativas,
+  compararCorredores,
+  sonRutasEquivalentes,
+  obtenerDiagnosticoCorredores,
+  generarCaminosYen,
 };

@@ -18,8 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.rutasegura.app",
-      "usesCleartextTraffic": true
+      "package": "com.rutasegura.app"
     },
     "web": {
       "output": "static",
@@ -30,23 +29,23 @@
       "expo-dev-client",
       "expo-location",
       [
-        "react-native-maps",
-        {
-          "androidGoogleMapsApiKey": "AIzaSyDfsd9y_xh5NeuqLOGY6wXEXmcxtIFtGWU"
-        }
-      ],
-      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      "expo-image",
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
       ]
-    ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    }
+    ]
   }
 }
