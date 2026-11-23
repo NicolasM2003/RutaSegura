@@ -96,7 +96,7 @@ describe("interpretarRutasAlternativas", () => {
 
     const [solicitud] = solicitarRespuesta.mock.calls[0];
 
-    expect(solicitud.maxOutputTokens).toBe(600);
+    expect(solicitud.maxOutputTokens).toBe(1600);
 
     const contextoEnviado = JSON.parse(solicitud.entrada);
 
@@ -152,7 +152,7 @@ describe("interpretarRutasAlternativas", () => {
       code: "IA_RECOMENDACION_NO_ES_MAS_SEGURA",
     });
 
-    expect(solicitarRespuesta).toHaveBeenCalledTimes(1);
+    expect(solicitarRespuesta).toHaveBeenCalledTimes(2);
   });
 
   test("debe evitar llamar a OpenAI si falta un puntaje de riesgo válido", async () => {
@@ -201,7 +201,7 @@ describe("interpretarRutasAlternativas", () => {
       code: "IA_JSON_INVALIDO",
     });
 
-    expect(solicitarRespuesta).toHaveBeenCalledTimes(1);
+    expect(solicitarRespuesta).toHaveBeenCalledTimes(2);
   });
 
   test("debe evitar llamar a OpenAI si hay perfiles duplicados", async () => {

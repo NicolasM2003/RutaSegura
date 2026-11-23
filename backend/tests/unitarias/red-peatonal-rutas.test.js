@@ -13,6 +13,13 @@ const BBOX = {
   maxLon: -71.55,
 };
 
+const BBOX_SIN_SEGMENTOS = {
+  minLat: -33.00,
+  minLon: -71.55,
+  maxLat: -32.99,
+  maxLon: -71.54,
+};
+
 const crearQuerySupabase = (data) => {
   const query = {
     select: jest.fn(() => query),
@@ -69,7 +76,7 @@ describe("red de rutas desde Supabase", () => {
     crearQuerySupabase([]);
 
     const segmentos = await obtenerRedPeatonal({
-      bbox: BBOX,
+      bbox: BBOX_SIN_SEGMENTOS,
       soloSupabase: true,
     });
 
