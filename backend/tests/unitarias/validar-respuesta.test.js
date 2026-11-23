@@ -1,191 +1,274 @@
+
+const mockResponsesCreate = jest.fn();
+
+jest.mock("openai", () =>
+  jest.fn().mockImplementation(() => ({
+    responses: {
+      create: mockResponsesCreate,
+    },
+  }))
+);
+
 const {
-  validarRespuestaModelo,
-} = require("../../src/services/ia/validar-respuesta.service");
+  interpretarRutasAlternativas,
+} = require("../../src/services/ia/interpretacion-rutas.service");
 
-describe("validarRespuestaModelo", () => {
-  const perfiles = ["menor_riesgo", "equilibrada"];
+describe("Integración del servicio de interpretación de rutas", () => {
+  const datosRuta = {
+    comuna: "Viña del Mar",
 
-  const respuestaValida = {
+    origen: {
+      latitud: -33.0472,
+      longitud: -71.6127,
+    },
+
+    destino: {
+      latitud: -33.036,
+      longitud: -71.6296,
+    },
+
+    rangoHorario: "20:00 - 23:59",
+
+    // Preferencia seleccionada por el usuario.
+    perfilSeleccionado: "equilibrada",
+
+    resultado: {
+      encontrada: true,
+      cantidad_rutas: 2,
+
+      // Perfil principal solicitado al calcular las rutas.
+      perfil_principal: "equilibrada",
+
+      rutas: [
+        {
+          perfil_ruta: "menor_riesgo",
+          nombre_perfil_ruta: "Menor riesgo",
+          distancia_metros: 1200,
+          tiempo_estimado_minutos: 15,
+          nivel_riesgo: "Bajo",
+          puntaje_riesgo: 22.5,
+          cantidad_segmentos: 8,
+          zonas_riesgo_afectadas: ["zona_1"],
+        },
+        {
+          perfil_ruta: "equilibrada",
+          nombre_perfil_ruta: "Equilibrada",
+          distancia_metros: 864,
+          tiempo_estimado_minutos: 12,
+          nivel_riesgo: "Medio",
+          puntaje_riesgo: 42.06,
+          cantidad_segmentos: 30,
+          zonas_riesgo_afectadas: [],
+        },
+      ],
+    },
+  };
+
+  const respuestaControlada = {
     output_text: JSON.stringify({
       resumen_general:
-        "Las alternativas presentan diferencias de distancia y riesgo.",
+        "Las rutas presentan diferentes distancias y niveles de riesgo. El usuario seleccionó la alternativa equilibrada, aunque la ruta de menor riesgo sigue siendo la más segura.",
 
       recomendacion: {
         perfil_ruta: "menor_riesgo",
         motivo:
-          "Presenta el menor puntaje de riesgo entre las alternativas.",
+          "Presenta el menor puntaje de riesgo entre las alternativas recibidas y prioriza la seguridad peatonal.",
       },
 
       comparaciones: [
         {
           perfil_ruta: "menor_riesgo",
           explicacion:
-            "Presenta el menor puntaje de riesgo entre las alternativas.",
+            "Presenta un puntaje de riesgo de 22.5. Es la alternativa de menor riesgo, aunque implica una distancia mayor.",
         },
         {
           perfil_ruta: "equilibrada",
           explicacion:
-            "Ofrece un recorrido más corto, con un puntaje de riesgo mayor.",
+            "Ofrece una distancia menor de 864 metros y un tiempo estimado de 12 minutos, pero presenta un puntaje de riesgo mayor de 42.06 respecto de la alternativa más segura.",
         },
       ],
 
       consideraciones: [
-        "Los resultados se basan en las métricas calculadas por RutaSegura.",
+        "La ruta equilibrada ofrece un recorrido más corto, pero presenta una mayor exposición relativa al riesgo según los datos disponibles.",
       ],
     }),
   };
 
-  test("debe aceptar una respuesta con la estructura esperada", () => {
-    const resultado = validarRespuestaModelo(
-      respuestaValida,
-      perfiles
+  beforeEach(() => {
+    mockResponsesCreate.mockReset();
+
+    process.env.OPENAI_API_KEY = "test-api-key";
+    process.env.OPENAI_MODEL = "gpt-4o-mini";
+    process.env.OPENAI_TIMEOUT_MS = "12000";
+    process.env.OPENAI_MAX_RETRIES = "0";
+  });
+
+  test("debe completar el flujo desde el contexto hasta la respuesta validada", async () => {
+    mockResponsesCreate.mockResolvedValue(
+      respuestaControlada
     );
 
-    expect(resultado.resumen_general).toContain(
-      "diferencias de distancia y riesgo"
-    );
+    const resultado =
+      await interpretarRutasAlternativas(datosRuta);
 
-    expect(resultado.recomendacion).toEqual({
-      perfil_ruta: "menor_riesgo",
-      motivo:
-        "Presenta el menor puntaje de riesgo entre las alternativas.",
-    });
+    // Se realizó una solicitud al cliente simulado.
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
 
+    const solicitud =
+      mockResponsesCreate.mock.calls[0][0];
+
+    // Se utiliza el modelo configurado.
+    expect(solicitud.model).toBe("gpt-4o-mini");
+
+    expect(solicitud.text.format.type).toBe("json_schema");
+    expect(solicitud.text.format.name).toBe("interpretacion_rutas");
+
+    // La solicitud contiene las instrucciones y el contexto.
+    expect(solicitud.instructions).toContain("RutaSegura");
+    expect(solicitud.max_output_tokens).toBe(600);
+
+    const contextoEnviado = JSON.parse(solicitud.input);
+
+    expect(contextoEnviado.comuna).toBe("Viña del Mar");
+    expect(contextoEnviado.cantidad_rutas).toBe(2);
+    expect(contextoEnviado.rutas).toHaveLength(2);
+
+    // Verificar que se envíe el perfil seleccionado.
+    expect(contextoEnviado.perfil_seleccionado)
+      .toBe("equilibrada");
+
+    // Verificar que se identifique la ruta de menor riesgo.
+    expect(contextoEnviado.perfil_mas_seguro)
+      .toBe("menor_riesgo");
+
+    // La respuesta se devuelve después de validarse.
     expect(resultado.comparaciones).toHaveLength(2);
 
     expect(
       resultado.comparaciones.map(
         (comparacion) => comparacion.perfil_ruta
       )
-    ).toEqual(perfiles);
+    ).toEqual([
+      "menor_riesgo",
+      "equilibrada",
+    ]);
 
-    expect(resultado.consideraciones).toHaveLength(1);
-  });
+    expect(resultado.recomendacion.perfil_ruta)
+      .toBe("menor_riesgo");
 
-  test("debe rechazar una respuesta vacía", () => {
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: "" },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_RESPUESTA_VACIA",
-      })
+    expect(resultado.resumen_general).toContain(
+      "diferentes distancias"
     );
   });
 
-  test("debe rechazar un JSON inválido", () => {
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: "Esto no es JSON" },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_JSON_INVALIDO",
-      })
-    );
-  });
-
-  test("debe rechazar una respuesta sin todas las comparaciones", () => {
-    const respuesta = {
+  test("debe rechazar una recomendación que no corresponda a la ruta de menor riesgo", async () => {
+    const respuestaIncorrecta = {
       output_text: JSON.stringify({
-        resumen_general: "Resumen válido.",
+        ...JSON.parse(respuestaControlada.output_text),
 
         recomendacion: {
-          perfil_ruta: "menor_riesgo",
-          motivo: "Tiene el menor puntaje de riesgo.",
+          perfil_ruta: "equilibrada",
+          motivo:
+            "Es más corta y tiene menor tiempo estimado.",
         },
-
-        comparaciones: [
-          {
-            perfil_ruta: "menor_riesgo",
-            explicacion: "Explicación válida.",
-          },
-        ],
-
-        consideraciones: [],
       }),
     };
 
-    expect(() =>
-      validarRespuestaModelo(respuesta, perfiles)
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_COMPARACIONES_INVALIDAS",
-      })
+    mockResponsesCreate.mockResolvedValue(
+      respuestaIncorrecta
     );
+
+    await expect(
+      interpretarRutasAlternativas(datosRuta)
+    ).rejects.toMatchObject({
+      code: "IA_RECOMENDACION_NO_ES_MAS_SEGURA",
+    });
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 
-  test("debe rechazar un perfil inventado en las comparaciones", () => {
-    const datos = JSON.parse(respuestaValida.output_text);
+  test("debe evitar llamar a OpenAI si falta un puntaje de riesgo válido", async () => {
+    const datosInvalidos = {
+      ...datosRuta,
 
-    datos.comparaciones[0].perfil_ruta =
-      "ruta_inexistente";
+      resultado: {
+        ...datosRuta.resultado,
 
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: JSON.stringify(datos) },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_PERFIL_INVALIDO",
-      })
-    );
+        rutas: [
+          {
+            ...datosRuta.resultado.rutas[0],
+            puntaje_riesgo: null,
+          },
+          datosRuta.resultado.rutas[1],
+        ],
+      },
+    };
+
+    await expect(
+      interpretarRutasAlternativas(datosInvalidos)
+    ).rejects.toMatchObject({
+      code: "IA_PUNTAJES_RIESGO_INVALIDOS",
+    });
+
+    expect(mockResponsesCreate).not.toHaveBeenCalled();
   });
 
-  test("debe rechazar un perfil duplicado en las comparaciones", () => {
-    const datos = JSON.parse(respuestaValida.output_text);
+  test("debe rechazar una respuesta controlada con JSON inválido", async () => {
+    mockResponsesCreate.mockResolvedValue({
+      output_text: "Respuesta que no es JSON",
+    });
 
-    datos.comparaciones[1].perfil_ruta =
-      "menor_riesgo";
+    await expect(
+      interpretarRutasAlternativas(datosRuta)
+    ).rejects.toMatchObject({
+      code: "IA_JSON_INVALIDO",
+    });
 
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: JSON.stringify(datos) },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_PERFIL_INVALIDO",
-      })
-    );
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 
-  test("debe rechazar una recomendación que no corresponda a una ruta existente", () => {
-    const datos = JSON.parse(respuestaValida.output_text);
-
-    datos.recomendacion.perfil_ruta =
-      "ruta_inexistente";
-
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: JSON.stringify(datos) },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_PERFIL_RECOMENDADO_INVALIDO",
+  test("debe normalizar un error de API sin entregar una interpretación", async () => {
+    mockResponsesCreate.mockRejectedValue(
+      Object.assign(new Error("Rate limit"), {
+        status: 429,
       })
     );
+
+    await expect(
+      interpretarRutasAlternativas(datosRuta)
+    ).rejects.toMatchObject({
+      name: "OpenAIServiceError",
+      code: "OPENAI_RATE_LIMIT",
+      status: 429,
+    });
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 
-  test("debe rechazar campos obligatorios con valores inválidos", () => {
-    const datos = JSON.parse(respuestaValida.output_text);
+  test("no debe llamar a OpenAI si hay perfiles duplicados", async () => {
+    const datosInvalidos = {
+      ...datosRuta,
 
-    datos.resumen_general = "";
+      resultado: {
+        ...datosRuta.resultado,
 
-    expect(() =>
-      validarRespuestaModelo(
-        { output_text: JSON.stringify(datos) },
-        perfiles
-      )
-    ).toThrow(
-      expect.objectContaining({
-        code: "IA_CAMPO_INVALIDO",
-      })
-    );
+        rutas: [
+          datosRuta.resultado.rutas[0],
+
+          {
+            ...datosRuta.resultado.rutas[1],
+            perfil_ruta: "menor_riesgo",
+          },
+        ],
+      },
+    };
+
+    await expect(
+      interpretarRutasAlternativas(datosInvalidos)
+    ).rejects.toMatchObject({
+      code: "IA_PERFILES_ESPERADOS_INVALIDOS",
+    });
+
+    expect(mockResponsesCreate).not.toHaveBeenCalled();
   });
 });
