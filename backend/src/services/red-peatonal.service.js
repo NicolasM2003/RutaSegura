@@ -289,6 +289,45 @@ const cacheEstaVigente = (
   );
 };
 
+// Tamaño de celda para agrupar BBOX cercanos.
+// 0.0025 grados equivale aproximadamente a 278 metros
+// en latitud, y algo menos en longitud en Viña del Mar.
+const CACHE_BBOX_GRID = 0.0025;
+
+const ajustarLimiteBbox = (
+  valor,
+  haciaArriba = false
+) => {
+  const unidades = valor / CACHE_BBOX_GRID;
+
+  const indice = haciaArriba
+    ? Math.ceil(unidades - 1e-10)
+    : Math.floor(unidades + 1e-10);
+
+  return Number(
+    (indice * CACHE_BBOX_GRID).toFixed(4)
+  );
+};
+
+const obtenerBboxCache = (bbox) => {
+  if (!bbox) {
+    return null;
+  }
+
+  return {
+    minLat: ajustarLimiteBbox(bbox.minLat),
+    minLon: ajustarLimiteBbox(bbox.minLon),
+    maxLat: ajustarLimiteBbox(
+      bbox.maxLat,
+      true
+    ),
+    maxLon: ajustarLimiteBbox(
+      bbox.maxLon,
+      true
+    ),
+  };
+};
+
 /*
  * ==========================================================
  * BBOX
@@ -1044,6 +1083,7 @@ const obtenerRedDesdeSupabase = async (
     return {
       encontrada: false,
       segmentos: [],
+      consultaFallida: true,
     };
   }
 };
@@ -1695,23 +1735,41 @@ const obtenerRedPeatonal = async ({
 
   
 if (comuna || (soloSupabase && bboxNormalizado)) {
+
+  // BBOX ampliado y estable para reutilizar la caché.
+  const bboxCache = obtenerBboxCache(
+    bboxNormalizado
+  );
+
   const cacheComuna = obtenerCacheComuna(comuna);
 
   const claveSupabase =
-    `supabase|bbox:${serializarBbox(bboxNormalizado)}|soloSupabase:${soloSupabase}`;
+    `supabase|bbox:${serializarBbox(bboxCache)}|soloSupabase:${soloSupabase}`;
 
-  const entradaCache = cacheComuna.get(claveSupabase);
+    console.log("DIAGNÓSTICO CACHÉ:", {
+      bboxOriginal: bboxNormalizado,
+      bboxCache,
+      claveSupabase,
+      existe: cacheComuna.has(claveSupabase),
+    });
+    
+  const entradaCache = cacheComuna.get(
+    claveSupabase
+  );
 
   let resultadoSupabase;
 
   // CACHE HIT: reutilizar información vigente.
   if (cacheEstaVigente(entradaCache)) {
+
     console.log(
       `CACHÉ HIT - SUPABASE - ${comuna || "BBOX"}`
     );
 
     resultadoSupabase = entradaCache.resultado;
+
   } else {
+
     // CACHE MISS: consultar la fuente original.
     console.log(
       `CACHÉ MISS - SUPABASE - ${comuna || "BBOX"}`
@@ -1719,12 +1777,13 @@ if (comuna || (soloSupabase && bboxNormalizado)) {
 
     const resultado = await obtenerRedDesdeSupabase(
       comuna,
-      bboxNormalizado,
+      bboxCache,
       { soloBbox: soloSupabase }
     );
 
     // No almacenar resultados de consultas fallidas.
     if (!resultado.consultaFallida) {
+
       cacheComuna.set(claveSupabase, {
         resultado,
         fecha: Date.now(),
@@ -1739,13 +1798,25 @@ if (comuna || (soloSupabase && bboxNormalizado)) {
   }
 
   if (resultadoSupabase.encontrada) {
+
+    // Filtrar nuevamente usando el BBOX original.
+    // Así evitamos entregar segmentos de más.
+    const segmentosSolicitados = bboxNormalizado
+      ? filtrarPorBbox(
+          resultadoSupabase.segmentos,
+          bboxNormalizado
+        )
+      : resultadoSupabase.segmentos;
+
     console.log(
-      `Red peatonal ${comuna}: ${resultadoSupabase.segmentos.length} segmentos ${
-        bboxNormalizado ? "dentro del BBOX" : "totales"
+      `Red peatonal ${comuna}: ${segmentosSolicitados.length} segmentos ${
+        bboxNormalizado
+          ? "dentro del BBOX"
+          : "totales"
       }`
     );
 
-    return resultadoSupabase.segmentos;
+    return segmentosSolicitados;
   }
 }
 
