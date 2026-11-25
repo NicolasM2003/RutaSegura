@@ -232,13 +232,3 @@ Durante cada sesión se registrarán:
 - Observaciones sobre la comprensión de la información y la navegación.
 
 La evaluación busca comprobar si la interfaz permite utilizar las funcionalidades principales y comprender la información presentada. Debido al tamaño de la muestra, los resultados tendrán carácter de evaluación de usabilidad del MVP y no de representación estadística de toda la población.
-
----
-
-## 5. Referencias
-
-- Biblioteca del Congreso Nacional de Chile. (2025). *Reporte regional Región de Valparaíso*. https://www.bcn.cl/siit/reportesregionales/reporte_final.html?anno=2025&cod_region=5
-- Centro de Estudios y Análisis del Delito (CEAD). (s.f.). *Estadísticas delictuales*. Gobierno de Chile. https://cead.minsegpublica.gob.cl/estadisticas-delictuales/
-- Ministerio de Seguridad Pública. (s.f.). *Sistema Integrado de Estadísticas Delictuales Territoriales (SIED Territorial)*. https://siedt.minsegpublica.gob.cl/
-- OpenStreetMap. (s.f.). *OpenStreetMap*. https://www.openstreetmap.org/
-- Subsecretaría de Prevención del Delito. (2024). *Presentación Encuesta Nacional Urbana de Seguridad Ciudadana (ENUSC) 2024*. Ministerio de Seguridad Pública, Gobierno de Chile.
