@@ -4,7 +4,7 @@
 
 Este documento establece los requerimientos funcionales y no funcionales de RutaSegura, junto con la delimitación del alcance del Producto Mínimo Viable (MVP).
 
-Los requerimientos funcionales describen las capacidades que debe proporcionar el sistema para cumplir los objetivos específicos definidos en A1. Los requerimientos no funcionales establecen condiciones medibles de seguridad y eficiencia para evaluar la calidad de la solución.
+Los requerimientos funcionales describen las capacidades que debe proporcionar el sistema para cumplir los objetivos específicos definidos en A1. Los requerimientos no funcionales establecen condiciones medibles de calidad para evaluar el comportamiento de la solución en aspectos como seguridad, eficiencia, usabilidad y confiabilidad de la información.
 
 El alcance permite distinguir las funcionalidades incorporadas en el MVP de aquellas que se consideran mejoras o extensiones futuras, evitando atribuir al producto capacidades que no forman parte de la versión desarrollada.
 
@@ -27,12 +27,12 @@ Los requerimientos funcionales se relacionan con los cuatro objetivos específic
 
 | ID | Tipo | Descripción | Prioridad | Objetivo asociado |
 |---|---|---|---|---|
-| RF-01 | Funcional | El backend debe consultar y entregar los registros delictuales georreferenciados almacenados en Supabase, considerando la información disponible para las comunas contempladas en el MVP. | Must | OE-1 |
+| RF-01 | Funcional | El backend debe consultar y entregar desde Supabase los registros delictuales obtenidos desde SIED Territorial, considerando la información disponible para las comunas contempladas en el MVP. | Must | OE-1 |
 | RF-02 | Funcional | El sistema debe obtener y utilizar una red peatonal georreferenciada proveniente de OpenStreetMap, mediante consultas a Overpass API, permitiendo recuperar información previamente almacenada cuando se encuentre disponible. | Must | OE-1, OE-3 |
-| RF-03 | Funcional | El sistema debe calcular el nivel de riesgo de las zonas a partir de los registros delictuales disponibles, asignando una clasificación de riesgo bajo, medio o alto. | Must | OE-2 |
+| RF-03 | Funcional | El sistema debe calcular y clasificar el nivel de riesgo de las zonas a partir de los registros delictuales disponibles, asignando una clasificación de riesgo bajo, medio o alto. | Must | OE-2 |
 | RF-04 | Funcional | El sistema debe representar en el mapa los delitos individuales y las zonas de riesgo, permitiendo distinguir visualmente la información según su ubicación y clasificación. | Must | OE-2 |
 | RF-05 | Funcional | El usuario debe poder seleccionar una comuna y un rango horario para consultar la información correspondiente. El sistema debe actualizar los delitos, las zonas de riesgo y los resultados asociados a las condiciones seleccionadas. | Must | OE-2, OE-3 |
-| RF-06 | Funcional | La aplicación debe permitir obtener y visualizar la ubicación actual del usuario cuando este autorice el acceso a la geolocalización. También debe permitir seleccionar puntos manualmente cuando la ubicación no esté disponible. | Should | OE-3, OE-4 |
+| RF-06 | Funcional | La aplicación debe permitir obtener y visualizar la ubicación actual del usuario cuando este autorice el acceso a la geolocalización. También debe permitir utilizar ubicaciones seleccionadas manualmente cuando la ubicación no esté disponible. | Should | OE-3, OE-4 |
 | RF-07 | Funcional | El usuario debe poder buscar una dirección para localizar un punto geográfico y utilizarlo en la consulta del mapa o la selección de un recorrido. | Should | OE-3, OE-4 |
 | RF-08 | Funcional | El usuario debe poder seleccionar un punto de origen y un punto de destino para solicitar el cálculo de un recorrido peatonal. | Must | OE-3 |
 | RF-09 | Funcional | El sistema debe generar hasta tres alternativas de rutas peatonales, considerando los perfiles de navegación Menor riesgo, Equilibrada y Más rápida, cuando existan recorridos válidos y suficientemente diferenciados. | Must | OE-3 |
@@ -47,6 +47,8 @@ Los requerimientos funcionales se relacionan con los cuatro objetivos específic
 La información delictual utilizada por el sistema proviene de SIED Territorial y se encuentra almacenada en Supabase.
 
 El MVP contempla registros correspondientes a tres comunas: Valparaíso, Viña del Mar y Concón. La información utilizada corresponde a un conjunto histórico y no representa un servicio de actualización delictual en tiempo real.
+
+La incorporación de nuevos registros no se realiza mediante una sincronización automática y continua con SIED Territorial.
 
 **RF-02 — Red peatonal**
 
@@ -105,7 +107,7 @@ Si la interpretación automática falla, el sistema debe conservar y presentar l
 
 Los requerimientos no funcionales establecen condiciones de calidad que pueden evaluarse mediante escenarios de prueba.
 
-Para el MVP se consideran obligatorios los atributos de seguridad y eficiencia.
+Para el MVP se consideran cuatro atributos principales: seguridad, eficiencia, usabilidad y confiabilidad de la información.
 
 ### 3.1. RNF-01 — Seguridad
 
@@ -127,7 +129,7 @@ La seguridad se verificará mediante pruebas negativas sobre los endpoints de la
 
 Se considerarán, entre otros, los siguientes escenarios:
 
-- Envío de coordenadas inválidas.
+- Envío de coordenadas inválidas o fuera de los rangos geográficos permitidos.
 - Envío de fechas con formatos incorrectos.
 - Envío de rangos horarios no permitidos.
 - Envío de parámetros obligatorios incompletos.
@@ -186,7 +188,78 @@ En ambos escenarios se registrarán los tiempos de respuesta, las solicitudes ex
 
 La medición se realizará después del arranque inicial del servicio para evitar que el tiempo de activación del entorno de alojamiento distorsione los resultados. También se documentará el estado de la caché, ya que su utilización puede influir en los tiempos de consulta.
 
+En las consultas de rutas se considerará el tiempo de respuesta completo que recibe el cliente, incluida la interpretación de IA cuando esté disponible. Si se produce un fallo del servicio de IA, se verificará que las rutas calculadas continúen disponibles y se registrará la condición de ejecución.
+
 El número de solicitudes, la distribución de concurrencia y las herramientas utilizadas se detallarán en el plan de pruebas correspondiente a A5.
+
+---
+
+### 3.3. RNF-03 — Usabilidad
+
+| Parte | Descripción |
+|---|---|
+| ID | RNF-03 |
+| Tipo | Usabilidad |
+| Prioridad | Must |
+| Objetivo asociado | OE-4 |
+| Fuente | Usuario peatón que utiliza la aplicación móvil sin conocimientos técnicos especializados. |
+| Estímulo | El usuario necesita identificar zonas de riesgo, consultar una ruta, comparar alternativas y aplicar filtros horarios. |
+| Entorno | Aplicación móvil Android del MVP. |
+| Respuesta esperada | La aplicación permite completar las tareas principales mediante controles comprensibles y una presentación clara de la información. |
+| Medida de respuesta | Al menos el 80 % de los participantes debe completar correctamente las cuatro tareas de usabilidad sin recibir asistencia. Para una muestra de cinco participantes, al menos cuatro deben completar todas las tareas. |
+
+#### Método de verificación
+
+La usabilidad se evaluará mediante sesiones individuales con cinco participantes, procurando incluir personas que se hayan trasladado recientemente desde otra comuna o región, al menos una persona mayor y peatones que realicen desplazamientos nocturnos.
+
+Durante cada sesión se solicitará realizar las siguientes tareas:
+
+1. Identificar zonas de alto riesgo en el mapa.
+2. Consultar una ruta entre un origen y un destino.
+3. Comparar las alternativas de ruta y sus indicadores de riesgo.
+4. Aplicar un filtro horario y comprender los cambios producidos en el mapa.
+
+Para la tercera tarea se utilizará un escenario de consulta que permita disponer de alternativas comparables cuando la red peatonal lo permita.
+
+Se registrará el cumplimiento de cada tarea, la necesidad de asistencia, el tiempo empleado, las dificultades encontradas y las observaciones de los participantes.
+
+Para cumplir la meta, al menos cuatro de los cinco participantes deberán completar correctamente las cuatro tareas sin asistencia.
+
+---
+
+### 3.4. RNF-04 — Confiabilidad de la información
+
+| Parte | Descripción |
+|---|---|
+| ID | RNF-04 |
+| Tipo | Confiabilidad |
+| Prioridad | Must |
+| Objetivo asociado | OE-1 y OE-2 |
+| Fuente | Usuario que consulta información delictual y territorial mediante la aplicación. |
+| Estímulo | El usuario solicita información delictual filtrada por comuna y rango horario. |
+| Entorno | Aplicación conectada al backend y a la base de datos Supabase. |
+| Respuesta esperada | El sistema presenta los registros que corresponden a los filtros solicitados y mantiene la consistencia entre los datos entregados por el backend y su representación en el mapa. |
+| Medida de respuesta | El 100 % de los casos de prueba controlados debe presentar los registros correspondientes a los filtros aplicados, sin incorporar registros ajenos al escenario evaluado. |
+
+#### Método de verificación
+
+La confiabilidad de la información se verificará mediante escenarios de prueba controlados que consideren distintas comunas y rangos horarios.
+
+Se realizarán las siguientes comprobaciones:
+
+- Comparar los registros esperados con los devueltos por el backend.
+- Verificar que los registros correspondan a la comuna seleccionada.
+- Comprobar que los registros pertenezcan al rango horario solicitado.
+- Comprobar que los datos representados en el mapa correspondan a la información entregada por el backend.
+- Verificar que al modificar los filtros se actualice la información presentada sin conservar registros ajenos a la nueva consulta.
+
+El resultado se calculará mediante la siguiente relación:
+
+**Porcentaje de casos correctos = (Casos de prueba que cumplen las condiciones esperadas / Total de casos de prueba ejecutados) × 100**
+
+La meta corresponde al 100 % de los casos controlados ejecutados.
+
+Este requerimiento evalúa la consistencia de la información procesada y presentada por el sistema. No garantiza por sí solo que cada coordenada obtenida desde la fuente original esté asociada geográficamente de manera exacta a su respectivo registro delictual. Esa limitación se documenta en A1.
 
 ---
 
@@ -247,7 +320,18 @@ La cobertura corresponde a los sectores urbanos contemplados en el conjunto de i
 | Publicación en Google Play o App Store | Excluido | La entrega contempla una compilación Android de prueba instalada mediante APK, no una publicación en tiendas. |
 | Publicación de una versión web como entregable del Hito 3 | Excluido | El incremento y la validación de este hito se enfocan en la aplicación móvil Android. |
 
-### 4.4. Limitaciones del MVP
+### 4.4. Atributos de calidad considerados para versiones futuras
+
+Además de los requerimientos no funcionales definidos para el MVP, se identifican otros atributos que podrán abordarse en futuras versiones.
+
+| Atributo | Decisión | Justificación |
+|---|---|---|
+| Alta disponibilidad | Excluido, versión futura | El MVP no contempla una arquitectura redundante, un acuerdo de nivel de servicio (SLA) ni mecanismos de recuperación que permitan comprometer un porcentaje específico de disponibilidad. |
+| Escalabilidad | Excluido, versión futura | El MVP se evalúa bajo una carga controlada de cinco usuarios concurrentes. No se ha definido ni validado una estrategia de escalamiento horizontal para volúmenes mayores de usuarios o datos. |
+
+Estos atributos podrán ser incorporados posteriormente mediante requerimientos específicos, métricas y escenarios de prueba que permitan comprobar su cumplimiento.
+
+### 4.5. Limitaciones del MVP
 
 El uso de RutaSegura presenta las siguientes limitaciones:
 
@@ -266,6 +350,8 @@ El uso de RutaSegura presenta las siguientes limitaciones:
 
 La siguiente matriz resume la relación entre los requerimientos definidos y los objetivos específicos de A1.
 
+### 5.1. Requerimientos funcionales
+
 | Requerimiento | OE-1 | OE-2 | OE-3 | OE-4 |
 |---|:---:|:---:|:---:|:---:|
 | RF-01. Consulta de datos delictuales | X | | | |
@@ -281,6 +367,15 @@ La siguiente matriz resume la relación entre los requerimientos definidos y los
 | RF-11. Interpretación mediante IA | | | X | X |
 | RF-12. Interfaz móvil | | | | X |
 
+### 5.2. Requerimientos no funcionales
+
+| Requerimiento | OE-1 | OE-2 | OE-3 | OE-4 |
+|---|:---:|:---:|:---:|:---:|
+| RNF-01. Seguridad | X | X | X | X |
+| RNF-02. Eficiencia | X | X | X | X |
+| RNF-03. Usabilidad | | | | X |
+| RNF-04. Confiabilidad de la información | X | X | | |
+
 Los requerimientos no funcionales RNF-01 y RNF-02 son transversales, ya que establecen condiciones de seguridad y eficiencia que afectan al funcionamiento general del sistema.
 
 ---
@@ -294,11 +389,18 @@ Los requerimientos definidos en este documento se utilizarán como referencia pa
 | A1 — Problema, hipótesis y objetivos medibles | Establece los objetivos a los que contribuyen los requerimientos. |
 | A3 — Historias de usuario y criterios de aceptación | Detalla las condiciones específicas que permiten comprobar el cumplimiento de los requerimientos. |
 | A4 — Matriz de trazabilidad | Relaciona cada requerimiento con los objetivos, historias de usuario, casos de prueba y evidencias. |
-| A5 — Plan de pruebas y evidencia de ejecución | Define y registra las pruebas utilizadas para verificar los requerimientos funcionales y no funcionales. |
-| A6 — Reportes de seguridad y eficiencia | Presenta los resultados de las evaluaciones de calidad, incluyendo los escenarios RNF-01 y RNF-02. |
+| A5 — Plan de pruebas y evidencia de ejecución | Define y registra las pruebas utilizadas para verificar los requerimientos funcionales, la confiabilidad de la información y los escenarios de usabilidad. |
+| A6 — Reportes de seguridad y eficiencia | Presenta los resultados de las evaluaciones de seguridad y eficiencia, incluyendo los escenarios RNF-01 y RNF-02. |
 
 Los requerimientos funcionales se verificarán mediante casos de prueba asociados a sus respectivas historias de usuario.
 
-Los requerimientos no funcionales se comprobarán mediante pruebas específicas de seguridad y carga, registrando las condiciones de ejecución, los resultados obtenidos y las evidencias correspondientes.
+Los requerimientos no funcionales se comprobarán mediante pruebas específicas:
+
+- Seguridad: pruebas negativas de validación de entradas y revisión de exposición de información sensible.
+- Eficiencia: pruebas de carga y medición de tiempos de respuesta.
+- Usabilidad: sesiones individuales con participantes y registro de cumplimiento de tareas.
+- Confiabilidad: escenarios controlados para comprobar la consistencia de los registros, filtros y representación de información.
+
+Los resultados deberán documentarse indicando las condiciones de ejecución, los indicadores obtenidos y las evidencias correspondientes.
 
 La definición de un requerimiento en este documento no implica que su cumplimiento se encuentre demostrado. Su estado deberá respaldarse mediante las pruebas y evidencias registradas en los artefactos correspondientes.
