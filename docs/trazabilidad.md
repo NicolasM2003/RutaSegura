@@ -81,23 +81,3 @@
 
 **Criterio de lectura de PR:** salvo PR #25, que se asocia directamente a la rama y contenido del filtro horario, las relaciones entre HU y PR se consideran **probables** cuando el PR implementa la funcionalidad pero no incluye el ID Jira de forma explícita. Los PR de integración (`#20`, `#37`, `#40`, `#45`, `#47` y `#49`) no se atribuyen a una HU individual.
 
-## 6. Pendientes para cerrar la trazabilidad
-
-0. Registrar la aprobación formal del Hito 3. En el acta disponible, la sección de decisión y las firmas aparecen pendientes; por tanto, SEG-6, SEG-9, SEG-8 y el bug de riesgo pueden figurar como implementados/resueltos según la evidencia técnica, pero no como formalmente aprobados por el stakeholder hasta completar ese registro.
-1. Cotejar los IDs y nombres resumidos RF/RNF de esta matriz contra el `docs/requerimientos.md` vigente y mantener exactamente sus prioridades.
-2. Adjuntar evidencia específica de clasificación peatonal para SEG-42, prueba directa de GPS para SEG-4/SEG-139 y captura manual de actualización del mapa para SEG-3.
-3. Identificar el archivo o comando exacto que produjo las 22/22 pruebas de riesgo y las 24/24 de costo (SEG-43/SEG-44).
-4. Incorporar una prueba de regresión identificable para la corrección de zonas SEG-144.
-5. Asociar nombres/IDs individuales de los casos del Sprint 3 a los reportes de A*, Yen y modelo híbrido; el acta actual informa resultados agregados.
-6. Completar evidencia de seguridad, carga/rendimiento y evaluación de usabilidad para RNF-01, RNF-02 y RNF-03. Para RNF-04, delimitar la cobertura realmente comprobada.
-7. No marcar el Hito 3 como tag hasta que exista y se verifique la referencia `hito3` en Git.
-
-## 7. Fuentes utilizadas
-
-- `Informe_Final_PT_Nicolas_Meneses.docx`: objetivos específicos y métricas de OE-1 a OE-4.
-- `DOCUMENTO_DE_PRUEBAS_RutaSegura_Sprint_1_y_2_con_evidencias.docx`: casos TU/TI/TF, resultados, evidencias y limitaciones de Sprint 1 y 2.
-- `Acta_Sprint_Review_2_Completada.docx`: HU revisadas, observaciones y aprobación de Sprint 2.
-- `Acta_Revision_Hito_3_RutaSegura.docx`: SEG-6, SEG-9, SEG-8, corrección del modelo de riesgo, pruebas agregadas y limitaciones.
-- Auditoría GitHub/Git de RutaSegura: asociación de ramas, commits, PR, tags e integraciones.
-- Matriz de Riesgos del Sprint 1: R-01 a R-04 y sus medidas de respuesta.
-- Rúbrica del Hito 3, apartado A4: cadena objetivo → requerimiento → modelo → HU → sprint → caso de prueba → evidencia → resultado → PR/tag; incluye riesgos y elementos no cumplidos.
